@@ -103,6 +103,11 @@ const isPointInsideBoundary = (point: Coordinate, boundary: Coordinate[]) => {
   return inside;
 };
 
+const midpoint = (first: Coordinate, second: Coordinate): Coordinate => ({
+  lat: (first.lat + second.lat) / 2,
+  lng: (first.lng + second.lng) / 2
+});
+
 const createDefaultOverlay = (center: Coordinate, aspectRatio: number): LayoutOverlay => ({
   center,
   widthMeters: 350,
@@ -754,6 +759,9 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
   const [mapCenter, setMapCenter] = useState<Coordinate>({ lat: defaultCenter[0], lng: defaultCenter[1] });
   const [overlayFocus, setOverlayFocus] = useState<Coordinate>({ lat: defaultCenter[0], lng: defaultCenter[1] });
+  const [draftBoundary, setDraftBoundary] = useState<Coordinate[] | null>(null);
+  const [activeVertexIndex, setActiveVertexIndex] = useState<number | null>(null);
+  const [activeBendIndex, setActiveBendIndex] = useState<number | null>(null);
   const [editingTag, setEditingTag] = useState<GeoTag | null>(null);
   const [isAddingTag, setIsAddingTag] = useState(false);
   const mapRef = useRef<L.Map | null>(null);
@@ -770,6 +778,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const hasBoundary = project.boundary.length >= 3;
   const isBoundaryFocusActive = project.isBoundaryConfirmed;
   const centerForOverlay = overlayFocus;
+  const visibleBoundary = draftBoundary ?? project.boundary;
 
   const fitBoundary = useMemo(() => (project.isBoundaryConfirmed ? project.boundary : []), [project.isBoundaryConfirmed, project.boundary]);
 
@@ -815,6 +824,33 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const addBoundaryPoint = (point: Coordinate) => {
     if (isBoundaryClosed) return;
     updateProject({ boundary: [...project.boundary, point], isBoundaryConfirmed: false });
+    setIsBoundaryClosed(false);
+  };
+
+  const moveBoundaryPoint = (index: number, point: Coordinate) => {
+    const nextBoundary = project.boundary.map((coordinate, pointIndex) => (pointIndex === index ? point : coordinate));
+    setDraftBoundary(null);
+    setActiveVertexIndex(null);
+    updateProject({ boundary: nextBoundary, isBoundaryConfirmed: false });
+    setIsBoundaryClosed(false);
+  };
+
+  const previewBoundaryPoint = (index: number, point: Coordinate) => {
+    setDraftBoundary(project.boundary.map((coordinate, pointIndex) => (pointIndex === index ? point : coordinate)));
+  };
+
+  const previewBentBoundary = (afterIndex: number, point: Coordinate) => {
+    const nextBoundary = [...project.boundary];
+    nextBoundary.splice(afterIndex + 1, 0, point);
+    setDraftBoundary(nextBoundary);
+  };
+
+  const bendBoundarySegment = (afterIndex: number, point: Coordinate) => {
+    const nextBoundary = [...project.boundary];
+    nextBoundary.splice(afterIndex + 1, 0, point);
+    setDraftBoundary(null);
+    setActiveBendIndex(null);
+    updateProject({ boundary: nextBoundary, isBoundaryConfirmed: false });
     setIsBoundaryClosed(false);
   };
 
@@ -1013,11 +1049,11 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
           </Marker>
         )}
 
-        {project.isBoundaryConfirmed && <BoundaryMask boundary={project.boundary} />}
-        {project.boundary.length > 0 && (
+        {project.isBoundaryConfirmed && <BoundaryMask boundary={visibleBoundary} />}
+        {visibleBoundary.length > 0 && (
           <>
             <Polygon
-              positions={project.boundary.map(toLatLngTuple)}
+              positions={visibleBoundary.map(toLatLngTuple)}
               pathOptions={{
                 color: project.isBoundaryConfirmed ? '#111827' : isBoundaryClosed ? '#16a34a' : '#ffffff',
                 fillColor: project.isBoundaryConfirmed ? 'transparent' : isBoundaryClosed ? '#16a34a' : primaryColor,
@@ -1027,7 +1063,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
               interactive={false}
             />
             <Polyline
-              positions={(isBoundaryClosed || project.isBoundaryConfirmed ? [...project.boundary, project.boundary[0]] : project.boundary).map(toLatLngTuple)}
+              positions={(isBoundaryClosed || project.isBoundaryConfirmed ? [...visibleBoundary, visibleBoundary[0]] : visibleBoundary).map(toLatLngTuple)}
               pathOptions={{ color: project.isBoundaryConfirmed ? '#111827' : isBoundaryClosed ? '#16a34a' : primaryColor, weight: project.isBoundaryConfirmed ? 7 : 3 }}
             />
           </>
@@ -1037,12 +1073,38 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
           <Marker
             key={`${point.lat}-${point.lng}-${index}`}
             position={toLatLngTuple(point)}
+            draggable
             icon={L.divIcon({
               className: 'boundary-point-icon',
-              html: `<span>${index + 1}</span>`,
+              html: `<span><strong>${index + 1}</strong></span>`,
               iconSize: [26, 26],
               iconAnchor: [13, 13]
             })}
+            eventHandlers={{
+              click: (event) => {
+                event.originalEvent?.stopPropagation();
+              },
+              mousedown: (event) => {
+                event.originalEvent?.stopPropagation();
+                setInteractionMode('map');
+              },
+              dragstart: () => {
+                setInteractionMode('map');
+              },
+              drag: (event) => {
+                const nextPoint = event.target.getLatLng();
+                previewBoundaryPoint(index, { lat: nextPoint.lat, lng: nextPoint.lng });
+              },
+              dragend: (event) => {
+                const nextPoint = event.target.getLatLng();
+                moveBoundaryPoint(index, { lat: nextPoint.lat, lng: nextPoint.lng });
+              },
+              contextmenu: (event) => {
+                event.originalEvent?.preventDefault();
+                event.originalEvent?.stopPropagation();
+                event.target.openPopup();
+              }
+            }}
           >
             <Popup>
               <button
@@ -1061,6 +1123,44 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             </Popup>
           </Marker>
         ))}
+
+        {!project.isBoundaryConfirmed && project.boundary.slice(0, isBoundaryClosed ? project.boundary.length : -1).map((point, index) => {
+          const nextPoint = project.boundary[(index + 1) % project.boundary.length];
+          if (!nextPoint) return null;
+          return (
+            <Marker
+              key={`bend-${point.lat}-${point.lng}-${index}`}
+              position={toLatLngTuple(midpoint(point, nextPoint))}
+              draggable
+              icon={L.divIcon({
+                className: 'boundary-bend-icon',
+                html: '<span></span>',
+                iconSize: [18, 18],
+                iconAnchor: [9, 9]
+              })}
+              eventHandlers={{
+                click: (event) => {
+                  event.originalEvent?.stopPropagation();
+                },
+                mousedown: (event) => {
+                  event.originalEvent?.stopPropagation();
+                  setInteractionMode('map');
+                },
+                dragstart: () => {
+                  setInteractionMode('map');
+                },
+                drag: (event) => {
+                  const bendPoint = event.target.getLatLng();
+                  previewBentBoundary(index, { lat: bendPoint.lat, lng: bendPoint.lng });
+                },
+                dragend: (event) => {
+                  const bendPoint = event.target.getLatLng();
+                  bendBoundarySegment(index, { lat: bendPoint.lat, lng: bendPoint.lng });
+                }
+              }}
+            />
+          );
+        })}
 
         {project.tags.map((tag) => (
           <Marker key={tag.id} position={[tag.lat, tag.lng]} icon={createTagIcon(tag)} eventHandlers={{ click: () => setEditingTag(tag) }}>

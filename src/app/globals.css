@@ -36,7 +36,8 @@ body {
 }
 
 .census-tag-icon,
-.boundary-point-icon {
+.boundary-point-icon,
+.boundary-bend-icon {
   background: transparent;
   border: 0;
 }
@@ -64,10 +65,31 @@ body {
   border-radius: 999px;
   box-shadow: 0 2px 8px rgb(15 23 42 / 0.18);
   color: #21216b;
+  cursor: grab;
   display: flex;
   font-size: 12px;
   font-weight: 800;
   height: 26px;
   justify-content: center;
+  position: relative;
   width: 26px;
+}
+
+.boundary-point-icon span:active {
+  cursor: grabbing;
+}
+
+.boundary-bend-icon span {
+  background: #ffffff;
+  border: 2px solid #16a34a;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.16);
+  cursor: grab;
+  display: block;
+  height: 18px;
+  transform: rotate(45deg);
+  width: 18px;
+}
+
+.boundary-bend-icon span:active {
+  cursor: grabbing;
 }
