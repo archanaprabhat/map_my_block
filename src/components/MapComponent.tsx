@@ -23,6 +23,7 @@ import {
   Plus,
   RotateCcw,
   RotateCw,
+  RefreshCw,
   Search,
   Trash2,
   Unlock,
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react';
 import { toPng } from 'html-to-image';
 import { CensusProject, Coordinate, GeoTag, LayoutOverlay, TagType } from '../lib/storage';
+import { APP_ONLINE_EVENT, isConnectivityError, restartApp, withTimeout } from '../lib/reliability';
 
 type AppMode = 'setup' | 'field';
 type ProfileTab = 'map' | 'profile';
@@ -60,7 +62,10 @@ type SegmentDragState = {
 const defaultCenter: [number, number] = [10.8505, 76.2711];
 const mapMinZoom = 0;
 const mapMaxZoom = 19;
-const primaryColor = '#21216b';
+const primaryColor = '#96a6b5';
+const tagDraftKey = 'map-my-block-tag-draft';
+const searchTimeoutMs = 10000;
+const exportTimeoutMs = 18000;
 const tagColors: Record<TagType, string> = {
   house: primaryColor,
   business: '#f97316',
@@ -174,9 +179,8 @@ const ControlButton = ({
     aria-label={title}
     onClick={onClick}
     disabled={disabled}
-    className={`grid h-11 w-11 place-items-center rounded-lg border text-gray-800 shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
-      active ? 'text-white' : 'border-gray-200 bg-white hover:bg-gray-50'
-    }`}
+    className={`grid h-11 w-11 place-items-center rounded-lg border text-gray-800 shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${active ? 'text-white' : 'border-gray-200 bg-white hover:bg-gray-50'
+      }`}
     style={active ? { backgroundColor: primaryColor, borderColor: primaryColor } : undefined}
   >
     {children}
@@ -226,7 +230,54 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [activeResult, setActiveResult] = useState<SearchResult | null>(null);
+  const [searchStatus, setSearchStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [searchError, setSearchError] = useState<string | null>(null);
   const skipNextSearch = useRef(false);
+
+  const performSearch = useCallback(
+    async (nextQuery: string, signal?: AbortSignal) => {
+      const trimmedQuery = nextQuery.trim();
+      if (trimmedQuery.length < 3) {
+        setSearchStatus('idle');
+        setSearchError(null);
+        setResults([]);
+        return;
+      }
+
+      if (!navigator.onLine) {
+        setSearchStatus('error');
+        setSearchError('Search needs internet. Retry when you are online.');
+        setResults([]);
+        return;
+      }
+
+      setSearchStatus('loading');
+      setSearchError(null);
+
+      try {
+        const response = await withTimeout(
+          fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(trimmedQuery)}&limit=5`, {
+            signal
+          }),
+          searchTimeoutMs,
+          'Search request timed out'
+        );
+
+        if (!response.ok) throw new Error(`Search failed with status ${response.status}`);
+        const data = (await response.json()) as SearchResult[];
+        setResults(data);
+        setSearchStatus('idle');
+        if (data.length === 0) setSearchError('No matching place found.');
+      } catch (err) {
+        if (signal?.aborted) return;
+        console.error('Search failed', err);
+        setResults([]);
+        setSearchStatus('error');
+        setSearchError(isConnectivityError(err) ? 'Could not reach search. Check connection and retry.' : 'Search failed. Please retry.');
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (skipNextSearch.current) {
@@ -239,24 +290,28 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
     }
 
     const controller = new AbortController();
-    const timeout = window.setTimeout(async () => {
-      try {
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`,
-          { signal: controller.signal }
-        );
-        const data = (await response.json()) as SearchResult[];
-        setResults(data);
-      } catch (err) {
-        if (!controller.signal.aborted) console.error('Search failed', err);
-      }
+    const timeout = window.setTimeout(() => {
+      performSearch(query, controller.signal);
     }, 450);
 
     return () => {
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [query]);
+  }, [performSearch, query]);
+
+  useEffect(() => {
+    const retryCurrentSearch = () => {
+      if (query.trim().length >= 3 && searchStatus === 'error') {
+        performSearch(query);
+      }
+    };
+
+    window.addEventListener(APP_ONLINE_EVENT, retryCurrentSearch);
+    return () => {
+      window.removeEventListener(APP_ONLINE_EVENT, retryCurrentSearch);
+    };
+  }, [performSearch, query, searchStatus]);
 
   const selectResult = (result: SearchResult) => {
     const coordinate = { lat: Number(result.lat), lng: Number(result.lon) };
@@ -273,6 +328,8 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
     setQuery('');
     setResults([]);
     setActiveResult(null);
+    setSearchStatus('idle');
+    setSearchError(null);
   };
 
   const submitSearch = (event: React.FormEvent<HTMLFormElement>) => {
@@ -297,7 +354,11 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
           onChange={(event) => {
             setQuery(event.target.value);
             setActiveResult(null);
-            if (event.target.value.trim().length < 3) setResults([]);
+            setSearchError(null);
+            if (event.target.value.trim().length < 3) {
+              setResults([]);
+              setSearchStatus('idle');
+            }
           }}
           className="h-11 w-full rounded-lg border border-gray-200 bg-white pl-10 pr-10 text-sm text-gray-900 shadow-sm outline-none focus:border-blue-600"
           placeholder="Search village, road, landmark"
@@ -326,6 +387,27 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
                 {result.display_name}
               </button>
             ))}
+          </div>
+        )}
+        {searchStatus === 'loading' && (
+          <div className="absolute mt-2 w-full rounded-lg border border-gray-200 bg-white px-3 py-3 text-xs font-medium text-gray-600 shadow-lg">
+            Searching...
+          </div>
+        )}
+        {searchError && results.length === 0 && (
+          <div className="absolute mt-2 w-full rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 shadow-lg">
+            <p className="font-semibold">{searchError}</p>
+            {searchStatus === 'error' && (
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => performSearch(query)}
+                className="mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-md bg-amber-900 font-semibold text-white"
+              >
+                <RefreshCw size={14} />
+                Retry
+              </button>
+            )}
           </div>
         )}
       </form>
@@ -474,7 +556,8 @@ function LayoutImageOverlay({
   onSelect,
   onGestureStart,
   onGestureEnd,
-  onChange
+  onPreview,
+  onCommit
 }: {
   image: string;
   overlay: LayoutOverlay;
@@ -483,7 +566,8 @@ function LayoutImageOverlay({
   onSelect: () => void;
   onGestureStart: () => void;
   onGestureEnd: () => void;
-  onChange: (overlay: LayoutOverlay) => void;
+  onPreview: (overlay: LayoutOverlay) => void;
+  onCommit: () => void;
 }) {
   const map = useMap();
   const [style, setStyle] = useState<React.CSSProperties>({});
@@ -501,18 +585,19 @@ function LayoutImageOverlay({
   const updatePosition = useCallback(() => {
     const centerLatLng = L.latLng(overlay.center.lat, overlay.center.lng);
     const center = map.latLngToContainerPoint(centerLatLng);
-    const crs = map.options.crs ?? L.CRS.EPSG3857;
-    const projectedCenter = crs.project(centerLatLng);
-    const projectedScale = 1 / Math.max(0.000001, Math.cos((overlay.center.lat * Math.PI) / 180));
-    const halfWidth = (overlay.widthMeters * projectedScale) / 2;
+
+    // Web Mercator meters-per-pixel formula
+    const earthCircumference = 40075016.686;
+    const latitudeRadians = (overlay.center.lat * Math.PI) / 180;
+    const mapZoom = map.getZoom();
+
+    // At zoom 0, the map is 256 pixels wide.
+    const metersPerPixel = (earthCircumference * Math.cos(latitudeRadians)) / Math.pow(2, mapZoom + 8);
+    const safeMetersPerPixel = Math.max(0.000001, metersPerPixel);
+
     const heightMeters = overlay.heightMeters || overlay.widthMeters / Math.max(0.1, overlay.aspectRatio);
-    const halfHeight = (heightMeters * projectedScale) / 2;
-    const west = map.latLngToContainerPoint(crs.unproject(L.point(projectedCenter.x - halfWidth, projectedCenter.y)));
-    const east = map.latLngToContainerPoint(crs.unproject(L.point(projectedCenter.x + halfWidth, projectedCenter.y)));
-    const north = map.latLngToContainerPoint(crs.unproject(L.point(projectedCenter.x, projectedCenter.y + halfHeight)));
-    const south = map.latLngToContainerPoint(crs.unproject(L.point(projectedCenter.x, projectedCenter.y - halfHeight)));
-    const width = Math.abs(east.x - west.x);
-    const height = Math.abs(north.y - south.y);
+    const width = overlay.widthMeters / safeMetersPerPixel;
+    const height = heightMeters / safeMetersPerPixel;
 
     setStyle({
       left: center.x,
@@ -608,7 +693,7 @@ function LayoutImageOverlay({
       const startPoint = map.latLngToContainerPoint([start.center.lat, start.center.lng]);
       const nextPoint = startPoint.add(pointer.subtract(start.pointer));
       const nextCenter = map.containerPointToLatLng(nextPoint);
-      onChange({ ...overlay, center: { lat: nextCenter.lat, lng: nextCenter.lng } });
+      onPreview({ ...overlay, center: { lat: nextCenter.lat, lng: nextCenter.lng } });
       return;
     }
 
@@ -623,18 +708,19 @@ function LayoutImageOverlay({
       const startWidthMeters = start.widthMeters ?? overlay.widthMeters;
       const metersPerPixel = startWidthMeters / Math.max(1, start.pixelWidth ?? 1);
       const widthMeters = Math.max(60, Math.min(2200, startWidthMeters + directionalDelta * metersPerPixel));
-      onChange({ ...overlay, widthMeters, heightMeters: widthMeters / Math.max(0.1, overlay.aspectRatio) });
+      onPreview({ ...overlay, widthMeters, heightMeters: widthMeters / Math.max(0.1, overlay.aspectRatio) });
       return;
     }
 
     const center = map.latLngToContainerPoint([overlay.center.lat, overlay.center.lng]);
     const angle = Math.atan2(pointer.y - center.y, pointer.x - center.x);
     const delta = ((angle - (start.startAngle ?? angle)) * 180) / Math.PI;
-    onChange({ ...overlay, rotation: (start.rotation ?? overlay.rotation) + delta });
+    onPreview({ ...overlay, rotation: (start.rotation ?? overlay.rotation) + delta });
   };
 
   const endTransform = () => {
     onGestureEnd();
+    onCommit();
     transformStart.current = null;
   };
 
@@ -647,9 +733,8 @@ function LayoutImageOverlay({
       onPointerUp={endTransform}
       onPointerCancel={endTransform}
       onLostPointerCapture={endTransform}
-      className={`absolute touch-none select-none ${
-        selected ? 'outline outline-3' : 'outline outline-1 outline-white/70'
-      } ${overlay.isLocked ? 'cursor-default' : 'cursor-move'}`}
+      className={`absolute touch-none select-none ${selected ? 'outline outline-3' : 'outline outline-1 outline-white/70'
+        } ${overlay.isLocked ? 'cursor-default' : 'cursor-move'}`}
       style={{ ...style, outlineColor: selected ? primaryColor : undefined }}
     >
       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -731,9 +816,36 @@ function TagEditor({
   onDelete?: () => void;
   onClose: () => void;
 }) {
-  const [label, setLabel] = useState(initial?.label ?? '');
-  const [type, setType] = useState<TagType>(initial?.type ?? 'house');
-  const [otherLabel, setOtherLabel] = useState(initial?.otherLabel ?? '');
+  const draftKey = `${tagDraftKey}-${initial?.id ?? 'new'}`;
+  const restoredDraft = useMemo(() => {
+    if (typeof window === 'undefined') return null;
+    const savedDraft = window.sessionStorage.getItem(draftKey);
+    if (!savedDraft) return null;
+
+    try {
+      return JSON.parse(savedDraft) as { label?: string; type?: TagType; otherLabel?: string };
+    } catch (err) {
+      console.warn('Tag draft could not be restored', err);
+      return null;
+    }
+  }, [draftKey]);
+  const [label, setLabel] = useState(restoredDraft?.label ?? initial?.label ?? '');
+  const [type, setType] = useState<TagType>(restoredDraft?.type ?? initial?.type ?? 'house');
+  const [otherLabel, setOtherLabel] = useState(restoredDraft?.otherLabel ?? initial?.otherLabel ?? '');
+
+  useEffect(() => {
+    window.sessionStorage.setItem(draftKey, JSON.stringify({ label, type, otherLabel }));
+  }, [draftKey, label, otherLabel, type]);
+
+  const saveAndClearDraft = () => {
+    window.sessionStorage.removeItem(draftKey);
+    onSave({ label: label.trim(), type, otherLabel: otherLabel.trim() || undefined });
+  };
+
+  const closeAndClearDraft = () => {
+    window.sessionStorage.removeItem(draftKey);
+    onClose();
+  };
 
   return (
     <div className="fixed inset-0 z-[2000] grid place-items-end bg-black/35 p-3 sm:place-items-center">
@@ -779,12 +891,12 @@ function TagEditor({
               <Trash2 size={18} />
             </button>
           )}
-          <button type="button" onClick={onClose} className="h-11 flex-1 rounded-lg bg-gray-100 font-medium text-gray-700">
+          <button type="button" onClick={closeAndClearDraft} className="h-11 flex-1 rounded-lg bg-gray-100 font-medium text-gray-700">
             Cancel
           </button>
           <button
             type="button"
-            onClick={() => onSave({ label: label.trim(), type, otherLabel: otherLabel.trim() || undefined })}
+            onClick={saveAndClearDraft}
             disabled={!label.trim()}
             className="h-11 flex-1 rounded-lg font-medium text-white disabled:opacity-50"
             style={{ backgroundColor: primaryColor }}
@@ -806,12 +918,24 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const [isOverlayGestureActive, setIsOverlayGestureActive] = useState(false);
   const [isBoundaryClosed, setIsBoundaryClosed] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
-  const [mapCenter, setMapCenter] = useState<Coordinate>({ lat: defaultCenter[0], lng: defaultCenter[1] });
-  const [overlayFocus, setOverlayFocus] = useState<Coordinate>({ lat: defaultCenter[0], lng: defaultCenter[1] });
+  const [mapCenter, setMapCenter] = useState<Coordinate>(
+    project.initialLocation
+      ? { lat: project.initialLocation.lat, lng: project.initialLocation.lng }
+      : { lat: defaultCenter[0], lng: defaultCenter[1] }
+  );
+  const [overlayFocus, setOverlayFocus] = useState<Coordinate>(
+    project.initialLocation
+      ? { lat: project.initialLocation.lat, lng: project.initialLocation.lng }
+      : { lat: defaultCenter[0], lng: defaultCenter[1] }
+  );
   const [draftBoundary, setDraftBoundary] = useState<Coordinate[] | null>(null);
+  const [draftOverlay, setDraftOverlay] = useState<LayoutOverlay | null>(null);
   const [isBoundarySegmentDragging, setIsBoundarySegmentDragging] = useState(false);
   const [editingTag, setEditingTag] = useState<GeoTag | null>(null);
   const [isAddingTag, setIsAddingTag] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const exportRef = useRef<HTMLDivElement>(null);
   const segmentDragRef = useRef<SegmentDragState | null>(null);
@@ -824,11 +948,12 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const handleCenterChange = useCallback((center: Coordinate) => {
     setMapCenter((currentCenter) => (isSameCoordinate(currentCenter, center) ? currentCenter : center));
   }, []);
-  const overlay = project.layoutOverlay;
+  const overlay = draftOverlay ?? project.layoutOverlay;
   const hasBoundary = project.boundary.length >= 3;
   const isBoundaryFocusActive = project.isBoundaryConfirmed;
-  const centerForOverlay = overlayFocus;
-  const visibleBoundary = draftBoundary ?? project.boundary;
+  const initialCenter = project.boundary.length > 0
+    ? project.boundary[0]
+    : (project.initialLocation ? { lat: project.initialLocation.lat, lng: project.initialLocation.lng } : mapCenter);
   const shouldCloseBoundaryPath = isBoundaryClosed || project.isBoundaryConfirmed;
   const boundaryLine = shouldCloseBoundaryPath && visibleBoundary.length > 0 ? [...visibleBoundary, visibleBoundary[0]] : visibleBoundary;
 
@@ -840,18 +965,20 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
 
   const locateMe = () => {
     if (!navigator.geolocation) {
-      alert('Location is not supported on this device.');
+      setLocationError('Location is not supported on this device.');
       return;
     }
+    setLocationError(null);
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
         const coordinate = { lat: position.coords.latitude, lng: position.coords.longitude };
+        setLocationError(null);
         setCurrentLocation(coordinate);
         focusOverlayAt(coordinate);
         mapRef.current?.flyTo(toLatLngTuple(coordinate), 18);
       },
-      () => alert('Unable to get location. Please allow location access for this site.'),
+      () => setLocationError('Unable to get location. Please allow location access and retry.'),
       { enableHighAccuracy: true, timeout: 12000 }
     );
   };
@@ -1035,21 +1162,29 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   };
 
   const exportMap = async () => {
-    if (!exportRef.current) return;
+    if (!exportRef.current || isExporting) return;
 
     try {
-      const dataUrl = await toPng(exportRef.current, {
-        cacheBust: true,
-        pixelRatio: 2,
-        filter: (node) => !(node instanceof HTMLElement && node.dataset.exportHidden === 'true')
-      });
+      setIsExporting(true);
+      setExportError(null);
+      const dataUrl = await withTimeout(
+        toPng(exportRef.current, {
+          cacheBust: true,
+          pixelRatio: 2,
+          filter: (node) => !(node instanceof HTMLElement && node.dataset.exportHidden === 'true')
+        }),
+        exportTimeoutMs,
+        'Export timed out'
+      );
       const link = document.createElement('a');
       link.download = `census-map-${new Date().toISOString().slice(0, 10)}.png`;
       link.href = dataUrl;
       link.click();
     } catch (err) {
       console.error('Map export failed', err);
-      alert('Export failed. Try switching to road map and export again.');
+      setExportError('Export failed. Retry, or switch to road map if satellite tiles are not available offline.');
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -1085,6 +1220,14 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             <Trash2 size={18} />
             Delete map and start over
           </button>
+          <button
+            type="button"
+            onClick={restartApp}
+            className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-gray-100 font-medium text-gray-800"
+          >
+            <RotateCcw size={18} />
+            Restart App
+          </button>
         </div>
       </div>
     );
@@ -1092,16 +1235,18 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
 
   return (
     <div ref={exportRef} className="relative h-dvh w-screen overflow-hidden bg-white">
-      <MapContainer center={defaultCenter} zoom={16} minZoom={mapMinZoom} maxZoom={mapMaxZoom} zoomControl={false} className="h-full w-full">
+      <MapContainer center={initialCenter} zoom={16} minZoom={mapMinZoom} maxZoom={mapMaxZoom} zoomControl={false} className="h-full w-full">
         <MapBridge onReady={handleMapReady} onCenterChange={handleCenterChange} />
         <MapLayerPanes />
         <MapGestureMode locked={mode === 'setup' && (isOverlayGestureActive || isBoundarySegmentDragging)} />
-        <LocateOnMount
-          onLocation={(coordinate) => {
-            setCurrentLocation(coordinate);
-            focusOverlayAt(coordinate);
-          }}
-        />
+        {!project.initialLocation && (
+          <LocateOnMount
+            onLocation={(coord) => {
+              handleCenterChange(coord);
+              setOverlayFocus(coord);
+            }}
+          />
+        )}
         <FittedBoundary boundary={fitBoundary} />
         <TileLayer
           attribution={tileLayers[baseLayer].attribution}
@@ -1139,7 +1284,13 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             }}
             onGestureStart={() => setIsOverlayGestureActive(true)}
             onGestureEnd={() => setIsOverlayGestureActive(false)}
-            onChange={(layoutOverlay) => updateProject({ layoutOverlay })}
+            onPreview={(layoutOverlay) => setDraftOverlay(layoutOverlay)}
+            onCommit={() => {
+              if (draftOverlay) {
+                updateProject({ layoutOverlay: draftOverlay });
+                setDraftOverlay(null);
+              }
+            }}
           />
         )}
 
@@ -1430,8 +1581,14 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             <MapPin size={18} />
             Add tag
           </button>
-          <button type="button" onClick={exportMap} className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg" title="Export map">
-            <Download size={19} />
+          <button
+            type="button"
+            onClick={exportMap}
+            disabled={isExporting}
+            className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+            title="Export map"
+          >
+            {isExporting ? <RefreshCw size={19} className="animate-spin" /> : <Download size={19} />}
           </button>
           <button
             type="button"
@@ -1453,7 +1610,10 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
           initial={editingTag}
           onClose={() => setEditingTag(null)}
           onSave={saveTag}
-          onDelete={() => deleteTag(editingTag.id)}
+          onDelete={() => {
+            window.sessionStorage.removeItem(`${tagDraftKey}-${editingTag.id}`);
+            deleteTag(editingTag.id);
+          }}
         />
       )}
 
@@ -1461,6 +1621,31 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
         <Crosshair size={14} className="mr-1 inline" style={{ color: primaryColor }} />
         {tileLayers[baseLayer].label}
       </div>
+      {(exportError || locationError) && (
+        <div data-export-hidden="true" className="absolute inset-x-3 top-28 z-[1100] rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 shadow-lg">
+          <p className="font-semibold">{exportError ?? locationError}</p>
+          {exportError && (
+            <button
+              type="button"
+              onClick={exportMap}
+              className="mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-md bg-amber-900 font-semibold text-white"
+            >
+              <RefreshCw size={14} />
+              Retry Export
+            </button>
+          )}
+          {locationError && (
+            <button
+              type="button"
+              onClick={locateMe}
+              className="mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-md bg-amber-900 font-semibold text-white"
+            >
+              <RefreshCw size={14} />
+              Retry Location
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

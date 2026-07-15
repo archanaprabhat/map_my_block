@@ -1,8 +1,15 @@
 import localforage from 'localforage';
+import { withTimeout } from './reliability';
 
 export type Coordinate = {
   lat: number;
   lng: number;
+};
+
+export type DetectedLocation = {
+  lat: number;
+  lng: number;
+  displayName: string;
 };
 
 export type TagType = 'house' | 'business' | 'school' | 'other';
@@ -35,6 +42,7 @@ export type CensusProject = {
   boundary: Coordinate[];
   isBoundaryConfirmed: boolean;
   tags: GeoTag[];
+  initialLocation: DetectedLocation | null;
 };
 
 const PROJECT_KEY = 'census-mapper-project-v2';
@@ -45,7 +53,8 @@ export const emptyProject: CensusProject = {
   layoutOverlay: null,
   boundary: [],
   isBoundaryConfirmed: false,
-  tags: []
+  tags: [],
+  initialLocation: null
 };
 
 const normalizeProject = (project: Partial<CensusProject> | null): CensusProject => {
@@ -58,6 +67,7 @@ const normalizeProject = (project: Partial<CensusProject> | null): CensusProject
     layoutImageAspectRatio,
     tags: project?.tags ?? [],
     boundary: project?.boundary ?? [],
+    initialLocation: project?.initialLocation ?? null,
     layoutOverlay: project?.layoutOverlay
       ? {
           ...project.layoutOverlay,
@@ -74,7 +84,11 @@ export const getProject = async (): Promise<CensusProject> => {
   if (typeof window === 'undefined') return emptyProject;
 
   try {
-    const project = await localforage.getItem<CensusProject>(PROJECT_KEY);
+    const project = await withTimeout(
+      localforage.getItem<CensusProject>(PROJECT_KEY),
+      8000,
+      'Project loading timed out'
+    );
     return normalizeProject(project);
   } catch (err) {
     console.error('Error loading project', err);
@@ -86,13 +100,19 @@ export const saveProject = async (project: CensusProject): Promise<void> => {
   if (typeof window === 'undefined') return;
 
   try {
-    await localforage.setItem(PROJECT_KEY, project);
+    await withTimeout(localforage.setItem(PROJECT_KEY, project), 8000, 'Project saving timed out');
   } catch (err) {
     console.error('Error saving project', err);
+    throw err;
   }
 };
 
 export const clearProject = async (): Promise<void> => {
   if (typeof window === 'undefined') return;
-  await localforage.removeItem(PROJECT_KEY);
+  try {
+    await withTimeout(localforage.removeItem(PROJECT_KEY), 8000, 'Project clearing timed out');
+  } catch (err) {
+    console.error('Error clearing project', err);
+    throw err;
+  }
 };
