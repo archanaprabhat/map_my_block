@@ -153,12 +153,16 @@ const ControlButton = ({
 function MapActions({
   baseLayer,
   onBaseLayerChange,
+  onBoundary,
+  hasBoundary,
   onLocate,
   onZoomIn,
   onZoomOut
 }: {
   baseLayer: BaseLayer;
   onBaseLayerChange: () => void;
+  onBoundary: () => void;
+  hasBoundary: boolean;
   onLocate: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -173,6 +177,9 @@ function MapActions({
       </ControlButton>
       <ControlButton title="Locate me" onClick={onLocate}>
         <LocateFixed size={20} />
+      </ControlButton>
+      <ControlButton title="My Boundary" onClick={onBoundary} disabled={!hasBoundary}>
+        <MapPin size={20} />
       </ControlButton>
       <ControlButton title={`Switch to ${baseLayer === 'street' ? 'satellite' : 'road'} map`} onClick={onBaseLayerChange}>
         <Layers size={20} />
@@ -791,6 +798,20 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
     );
   };
 
+  const goToBoundary = () => {
+    if (project.boundary.length === 0 || !mapRef.current) return;
+
+    if (project.boundary.length === 1) {
+      mapRef.current.flyTo(toLatLngTuple(project.boundary[0]), Math.max(mapRef.current.getZoom(), 17));
+      return;
+    }
+
+    mapRef.current.fitBounds(L.latLngBounds(project.boundary.map(toLatLngTuple)), {
+      animate: true,
+      padding: [36, 36]
+    });
+  };
+
   const addBoundaryPoint = (point: Coordinate) => {
     if (isBoundaryClosed) return;
     updateProject({ boundary: [...project.boundary, point], isBoundaryConfirmed: false });
@@ -957,6 +978,8 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
         <MapActions
           baseLayer={baseLayer}
           onBaseLayerChange={() => setBaseLayer(baseLayer === 'street' ? 'satellite' : 'street')}
+          onBoundary={goToBoundary}
+          hasBoundary={project.boundary.length > 0}
           onLocate={locateMe}
           onZoomIn={() => mapRef.current?.zoomIn()}
           onZoomOut={() => mapRef.current?.zoomOut()}
