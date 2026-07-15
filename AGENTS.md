@@ -34,6 +34,7 @@ Product Scope & Architecture Manual
     *   Once aligned over OSM data, the user clicks "Lock".
     *   User draws a continuous polyline boundary (using a library like Leaflet.draw).
     *   Includes a "Clear" option mid-way if they make a mistake.
+    *   **Boundary Delete Rule:** The delete/clear boundary control only removes plotted boundary points and drawings. It must never delete, reset, hide, or move the uploaded layout image or its aligned overlay. Layout visibility is controlled only by the layout map toggle, and changing the uploaded layout image is a separate replacement flow.
 6.  **Confirm Boundary:**
     *   Once closed and confirmed, all map areas outside this boundary polygon are grayed out.
     *   This setup is permanently saved in local storage (PWA persistent state).
