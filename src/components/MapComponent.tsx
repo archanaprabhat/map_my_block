@@ -1024,7 +1024,12 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             <Popup>
               <button
                 type="button"
-                onClick={() => deleteBoundaryPoint(index)}
+                onPointerDown={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  deleteBoundaryPoint(index);
+                }}
                 className="rounded-md px-3 py-2 text-sm font-semibold text-white"
                 style={{ backgroundColor: primaryColor }}
               >
