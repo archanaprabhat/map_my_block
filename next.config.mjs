@@ -10,6 +10,8 @@ const withPWA = withPWAInit({
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Moved out of experimental to the root level!
+  allowedDevOrigins: ['192.168.1.7'],
 };
 
 export default withPWA(nextConfig);

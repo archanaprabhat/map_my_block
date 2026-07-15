@@ -1,232 +1,1005 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
-import { MapContainer, TileLayer, Marker, Popup, Polygon, useMapEvents, useMap, ImageOverlay } from 'react-leaflet';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MapContainer, Marker, Polygon, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { GeoTag, Coordinate } from '../lib/storage';
-import { Locate, Search, MapPin } from 'lucide-react';
+import {
+  Check,
+  Crosshair,
+  Download,
+  Edit3,
+  Eye,
+  EyeOff,
+  ImageUp,
+  Layers,
+  LocateFixed,
+  Lock,
+  MapPin,
+  Maximize2,
+  Minimize2,
+  Minus,
+  Move,
+  Plus,
+  RotateCcw,
+  Search,
+  Trash2,
+  Unlock,
+  X
+} from 'lucide-react';
+import { toPng } from 'html-to-image';
+import { CensusProject, Coordinate, GeoTag, LayoutOverlay, TagType } from '../lib/storage';
 
-// Fix for default Leaflet marker icons in Next.js/React
-delete (L.Icon.Default.prototype as any)._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-});
+type AppMode = 'setup' | 'field';
+type ProfileTab = 'map' | 'profile';
+type BaseLayer = 'street' | 'satellite';
 
-interface MapComponentProps {
-  markers: GeoTag[];
-  boundary: Coordinate[];
-  activeTab: 'setup' | 'field-tag' | 'block-map';
-  onMapClick?: (lat: number, lng: number) => void;
-  center?: [number, number];
-  layoutImage?: string | null;
-}
-
-const MapEvents = ({ onMapClick }: { onMapClick?: (lat: number, lng: number) => void }) => {
-  useMapEvents({
-    click(e) {
-      if (onMapClick) {
-        onMapClick(e.latlng.lat, e.latlng.lng);
-      }
-    },
-  });
-  return null;
+type MapComponentProps = {
+  project: CensusProject;
+  mode: AppMode;
+  activeTab: ProfileTab;
+  onProjectChange: (project: CensusProject) => void;
+  onResetProject: () => void;
+  onReplaceLayout: () => void;
 };
 
-interface SearchResult {
+type SearchResult = {
   place_id: number;
   lat: string;
   lon: string;
   display_name: string;
+};
+
+const defaultCenter: [number, number] = [10.8505, 76.2711];
+const mapMinZoom = 0;
+const mapMaxZoom = 19;
+const tagColors: Record<TagType, string> = {
+  house: '#2563eb',
+  business: '#f97316',
+  school: '#16a34a',
+  other: '#7c3aed'
+};
+
+const tileLayers = {
+  street: {
+    label: 'Road',
+    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+    attribution: '&copy; OpenStreetMap contributors'
+  },
+  satellite: {
+    label: 'Satellite',
+    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    attribution: 'Tiles &copy; Esri'
+  }
+};
+
+delete (L.Icon.Default.prototype as { _getIconUrl?: unknown })._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
+});
+
+const toLatLngTuple = (coordinate: Coordinate): [number, number] => [coordinate.lat, coordinate.lng];
+
+const isSameCoordinate = (first: Coordinate, second: Coordinate) =>
+  Math.abs(first.lat - second.lat) < 0.0000001 && Math.abs(first.lng - second.lng) < 0.0000001;
+
+const isPointInsideBoundary = (point: Coordinate, boundary: Coordinate[]) => {
+  if (boundary.length < 3) return true;
+
+  let inside = false;
+  for (let i = 0, j = boundary.length - 1; i < boundary.length; j = i++) {
+    const xi = boundary[i].lng;
+    const yi = boundary[i].lat;
+    const xj = boundary[j].lng;
+    const yj = boundary[j].lat;
+    const intersects = yi > point.lat !== yj > point.lat && point.lng < ((xj - xi) * (point.lat - yi)) / (yj - yi) + xi;
+    if (intersects) inside = !inside;
+  }
+
+  return inside;
+};
+
+const createDefaultOverlay = (center: Coordinate, aspectRatio: number): LayoutOverlay => ({
+  center,
+  widthMeters: 350,
+  heightMeters: 350 / Math.max(0.1, aspectRatio),
+  aspectRatio: Math.max(0.1, aspectRatio),
+  rotation: 0,
+  opacity: 0.55,
+  isLocked: false,
+  isVisible: true
+});
+
+const createTagIcon = (tag: GeoTag) =>
+  L.divIcon({
+    className: 'census-tag-icon',
+    html: `<span style="background:${tagColors[tag.type]}">${tag.label}</span>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17]
+  });
+
+const ControlButton = ({
+  title,
+  onClick,
+  children,
+  active = false,
+  disabled = false
+}: {
+  title: string;
+  onClick: () => void;
+  children: React.ReactNode;
+  active?: boolean;
+  disabled?: boolean;
+}) => (
+  <button
+    type="button"
+    title={title}
+    aria-label={title}
+    onClick={onClick}
+    disabled={disabled}
+    className={`grid h-11 w-11 place-items-center rounded-lg border text-gray-800 shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+      active ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-200 bg-white hover:bg-gray-50'
+    }`}
+  >
+    {children}
+  </button>
+);
+
+function MapActions({
+  baseLayer,
+  onBaseLayerChange,
+  onLocate,
+  onZoomIn,
+  onZoomOut
+}: {
+  baseLayer: BaseLayer;
+  onBaseLayerChange: () => void;
+  onLocate: () => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+}) {
+  return (
+    <div className="absolute right-3 top-3 z-[1000] flex flex-col gap-2">
+      <ControlButton title="Zoom in" onClick={onZoomIn}>
+        <Plus size={20} />
+      </ControlButton>
+      <ControlButton title="Zoom out" onClick={onZoomOut}>
+        <Minus size={20} />
+      </ControlButton>
+      <ControlButton title="Locate me" onClick={onLocate}>
+        <LocateFixed size={20} />
+      </ControlButton>
+      <ControlButton title={`Switch to ${baseLayer === 'street' ? 'satellite' : 'road'} map`} onClick={onBaseLayerChange}>
+        <Layers size={20} />
+      </ControlButton>
+    </div>
+  );
 }
 
-const MapController = () => {
+function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordinate) => void }) {
   const map = useMap();
-  const [searchQuery, setSearchQuery] = useState('');
-  const [suggestions, setSuggestions] = useState<SearchResult[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<SearchResult[]>([]);
+  const skipNextSearch = useRef(false);
 
-  // Debounced Search Effect
   useEffect(() => {
-    const fetchSuggestions = async () => {
-      if (searchQuery.trim().length < 3) {
-        setSuggestions([]);
-        return;
-      }
-      setIsSearching(true);
+    if (skipNextSearch.current) {
+      skipNextSearch.current = false;
+      return;
+    }
+
+    if (query.trim().length < 3) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
       try {
-        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&viewbox=74.5,8.0,77.5,13.0&bounded=1&limit=5`);
-        const data = await res.json();
-        setSuggestions(data || []);
+        const response = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=5`,
+          { signal: controller.signal }
+        );
+        const data = (await response.json()) as SearchResult[];
+        setResults(data);
       } catch (err) {
-        console.error("Failed to fetch suggestions", err);
-      } finally {
-        setIsSearching(false);
+        if (!controller.signal.aborted) console.error('Search failed', err);
       }
+    }, 450);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
     };
+  }, [query]);
 
-    const delayDebounceFn = setTimeout(() => {
-      fetchSuggestions();
-    }, 500); // 500ms debounce
-
-    return () => clearTimeout(delayDebounceFn);
-  }, [searchQuery]);
-
-  // Click outside to close dropdown
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setSuggestions([]);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [dropdownRef]);
-
-  const handleLocateMe = () => {
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (position) => {
-          const { latitude, longitude } = position.coords;
-          map.flyTo([latitude, longitude], 18);
-        },
-        (error) => {
-          alert('Unable to retrieve your location.');
-          console.error(error);
-        },
-        { enableHighAccuracy: true }
-      );
-    }
+  const selectResult = (result: SearchResult) => {
+    const coordinate = { lat: Number(result.lat), lng: Number(result.lon) };
+    skipNextSearch.current = true;
+    onLocationSelect(coordinate);
+    map.flyTo(toLatLngTuple(coordinate), 17);
+    setQuery(result.display_name);
+    setResults([]);
   };
 
-  const handleSelectSuggestion = (suggestion: SearchResult) => {
-    map.flyTo([parseFloat(suggestion.lat), parseFloat(suggestion.lon)], 16);
-    setSearchQuery(suggestion.display_name);
-    setSuggestions([]);
-  };
-
-  const handleSearchSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (suggestions.length > 0) {
-      handleSelectSuggestion(suggestions[0]);
-    }
+  const clearSearch = () => {
+    skipNextSearch.current = true;
+    setQuery('');
+    setResults([]);
   };
 
   return (
-    <div className="absolute top-4 left-4 right-4 z-[1000] flex flex-col space-y-2 pointer-events-none" ref={dropdownRef}>
-      <div className="relative pointer-events-auto">
-        <form onSubmit={handleSearchSubmit} className="flex space-x-2">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search in Kerala..."
-            className="flex-1 bg-white p-3 rounded-xl shadow-lg border border-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
-          />
-          <button 
+    <div className="absolute left-3 right-[4.25rem] top-3 z-[1000]">
+      <div className="relative">
+        <Search size={18} className="pointer-events-none absolute left-3 top-3.5 text-gray-400" />
+        <input
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            if (event.target.value.trim().length < 3) setResults([]);
+          }}
+          className="h-11 w-full rounded-lg border border-gray-200 bg-white pl-10 pr-10 text-sm text-gray-900 shadow-sm outline-none focus:border-blue-600"
+          placeholder="Search village, road, landmark"
+        />
+        {query.length > 0 && (
+          <button
             type="button"
-            onClick={handleLocateMe}
-            className="bg-white text-gray-800 p-3 rounded-xl shadow-lg border border-gray-200 hover:bg-gray-50 transition flex items-center justify-center"
-            title="Locate Me"
+            onClick={clearSearch}
+            className="absolute right-2 top-2 grid h-7 w-7 place-items-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-800"
+            aria-label="Clear search"
+            title="Clear search"
           >
-            <Locate size={20} className="text-blue-600" />
+            <X size={16} />
           </button>
-        </form>
-
-        {/* Suggestions Dropdown */}
-        {suggestions.length > 0 && (
-          <ul className="absolute top-full mt-2 w-full bg-white rounded-xl shadow-xl border border-gray-200 max-h-60 overflow-y-auto">
-            {suggestions.map((suggestion) => (
-              <li 
-                key={suggestion.place_id}
-                onClick={() => handleSelectSuggestion(suggestion)}
-                className="flex items-start p-3 hover:bg-blue-50 cursor-pointer border-b border-gray-100 last:border-b-0 transition"
+        )}
+        {results.length > 0 && (
+          <div className="absolute mt-2 max-h-64 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg">
+            {results.map((result) => (
+              <button
+                key={result.place_id}
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => selectResult(result)}
+                className="block w-full border-b border-gray-100 px-3 py-3 text-left text-xs text-gray-700 last:border-b-0 hover:bg-blue-50"
               >
-                <MapPin size={16} className="text-gray-400 mt-1 mr-2 shrink-0" />
-                <span className="text-sm text-gray-700 truncate">{suggestion.display_name}</span>
-              </li>
+                {result.display_name}
+              </button>
             ))}
-          </ul>
+          </div>
         )}
       </div>
     </div>
   );
-};
+}
 
-export default function MapComponent({ markers, boundary, activeTab, onMapClick, center, layoutImage }: MapComponentProps) {
-  // Default to somewhere in Kerala (Kochi)
-  const [mapCenter, setMapCenter] = useState<[number, number]>(center || [9.9312, 76.2673]);
-
-  const getImageBounds = (): L.LatLngBoundsExpression | null => {
-    if (boundary.length < 2) return null;
-    const lats = boundary.map(c => c.lat);
-    const lngs = boundary.map(c => c.lng);
-    return [
-      [Math.min(...lats), Math.min(...lngs)],
-      [Math.max(...lats), Math.max(...lngs)]
-    ];
-  };
-
-  const imageBounds = getImageBounds();
+function MapGestureMode({ locked }: { locked: boolean }) {
+  const map = useMap();
 
   useEffect(() => {
-    if (center) {
-      setMapCenter(center);
-    } else if (boundary.length > 0) {
-      setMapCenter([boundary[0].lat, boundary[0].lng]);
-    } else if (markers.length > 0) {
-      setMapCenter([markers[0].lat, markers[0].lng]);
+    const handlers = [map.dragging, map.touchZoom, map.doubleClickZoom, map.scrollWheelZoom, map.boxZoom, map.keyboard];
+
+    handlers.forEach((handler) => {
+      if (locked) {
+        handler.disable();
+      } else {
+        handler.enable();
+      }
+    });
+
+    return () => {
+      handlers.forEach((handler) => handler.enable());
+    };
+  }, [locked, map]);
+
+  return null;
+}
+
+function LocateOnMount({ onLocation }: { onLocation: (coordinate: Coordinate) => void }) {
+  const map = useMap();
+  const hasRequested = useRef(false);
+
+  useEffect(() => {
+    if (hasRequested.current || typeof navigator === 'undefined' || !navigator.geolocation) return;
+    hasRequested.current = true;
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coordinate = { lat: position.coords.latitude, lng: position.coords.longitude };
+        onLocation(coordinate);
+        map.flyTo(toLatLngTuple(coordinate), 18);
+      },
+      (error) => {
+        console.warn('Location permission was not granted', error);
+      },
+      { enableHighAccuracy: true, timeout: 12000 }
+    );
+  }, [map, onLocation]);
+
+  return null;
+}
+
+function ClickToPlot({
+  enabled,
+  onAddPoint,
+  onMapInteraction
+}: {
+  enabled: boolean;
+  onAddPoint: (point: Coordinate) => void;
+  onMapInteraction: () => void;
+}) {
+  const map = useMapEvents({
+    mousedown() {
+      onMapInteraction();
+    },
+    click(event) {
+      onMapInteraction();
+      if (enabled) onAddPoint({ lat: event.latlng.lat, lng: event.latlng.lng });
     }
-  }, [center, boundary, markers]);
+  });
+
+  useEffect(() => {
+    map.on('touchstart', onMapInteraction);
+    return () => {
+      map.off('touchstart', onMapInteraction);
+    };
+  }, [map, onMapInteraction]);
+
+  return null;
+}
+
+function MapBridge({
+  onReady,
+  onCenterChange
+}: {
+  onReady: (map: L.Map) => void;
+  onCenterChange: (center: Coordinate) => void;
+}) {
+  const map = useMap();
+
+  useEffect(() => {
+    onReady(map);
+    const updateCenter = () => {
+      const center = map.getCenter();
+      onCenterChange({ lat: center.lat, lng: center.lng });
+    };
+
+    updateCenter();
+    map.on('moveend', updateCenter);
+    return () => {
+      map.off('moveend', updateCenter);
+    };
+  }, [map, onCenterChange, onReady]);
+
+  return null;
+}
+
+function FittedBoundary({ boundary }: { boundary: Coordinate[] }) {
+  const map = useMap();
+  const hasFit = useRef(false);
+
+  useEffect(() => {
+    if (hasFit.current || boundary.length < 3) return;
+    hasFit.current = true;
+    map.fitBounds(L.latLngBounds(boundary.map(toLatLngTuple)), { padding: [28, 28] });
+  }, [boundary, map]);
+
+  return null;
+}
+
+function LayoutImageOverlay({
+  image,
+  overlay,
+  selected,
+  onSelect,
+  onGestureStart,
+  onGestureEnd,
+  onChange
+}: {
+  image: string;
+  overlay: LayoutOverlay;
+  selected: boolean;
+  onSelect: () => void;
+  onGestureStart: () => void;
+  onGestureEnd: () => void;
+  onChange: (overlay: LayoutOverlay) => void;
+}) {
+  const map = useMap();
+  const [style, setStyle] = useState<React.CSSProperties>({});
+  const dragStart = useRef<{ pointer: L.Point; center: Coordinate } | null>(null);
+
+  const updatePosition = useCallback(() => {
+    const center = map.latLngToContainerPoint([overlay.center.lat, overlay.center.lng]);
+    const lngMeters = Math.max(1, 111320 * Math.cos((overlay.center.lat * Math.PI) / 180));
+    const widthPoint = map.latLngToContainerPoint([overlay.center.lat, overlay.center.lng + overlay.widthMeters / lngMeters]);
+    const width = Math.max(80, Math.abs(widthPoint.x - center.x));
+    const height = width / Math.max(0.1, overlay.aspectRatio);
+
+    setStyle({
+      left: center.x,
+      top: center.y,
+      width,
+      height,
+      opacity: overlay.opacity,
+      transform: `translate(-50%, -50%) rotate(${overlay.rotation}deg)`,
+      pointerEvents: overlay.isLocked ? 'none' : 'auto'
+    });
+  }, [map, overlay.aspectRatio, overlay.center.lat, overlay.center.lng, overlay.isLocked, overlay.opacity, overlay.rotation, overlay.widthMeters]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(updatePosition);
+    map.on('move zoom resize', updatePosition);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      map.off('move zoom resize', updatePosition);
+    };
+  }, [map, updatePosition]);
+
+  const startDrag = (event: React.PointerEvent<HTMLImageElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect();
+    if (overlay.isLocked) return;
+    onGestureStart();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragStart.current = {
+      pointer: L.point(event.clientX, event.clientY),
+      center: overlay.center
+    };
+  };
+
+  const drag = (event: React.PointerEvent<HTMLImageElement>) => {
+    event.stopPropagation();
+    if (!dragStart.current || overlay.isLocked) return;
+    const startPoint = map.latLngToContainerPoint([dragStart.current.center.lat, dragStart.current.center.lng]);
+    const nextPoint = startPoint.add(L.point(event.clientX, event.clientY).subtract(dragStart.current.pointer));
+    const nextCenter = map.containerPointToLatLng(nextPoint);
+    onChange({ ...overlay, center: { lat: nextCenter.lat, lng: nextCenter.lng } });
+  };
+
+  const endDrag = () => {
+    onGestureEnd();
+    dragStart.current = null;
+  };
+
+  if (!overlay.isVisible) return null;
 
   return (
-    <MapContainer
-      center={mapCenter}
-      zoom={13}
-      style={{ height: '100%', width: '100%' }}
-      className="z-0"
-      zoomControl={false}
-    >
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      />
-      
-      <MapController />
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={image}
+      alt=""
+      onPointerDown={startDrag}
+      onPointerMove={drag}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
+      onLostPointerCapture={endDrag}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect();
+      }}
+      className={`absolute z-[550] touch-none select-none object-fill ${
+        selected ? 'outline outline-3 outline-blue-500' : 'outline outline-1 outline-white/70'
+      } ${overlay.isLocked ? 'cursor-default' : 'cursor-move'}`}
+      style={style}
+      draggable={false}
+    />
+  );
+}
 
-      {activeTab === 'setup' && <MapEvents onMapClick={onMapClick} />}
+function BoundaryMask({ boundary }: { boundary: Coordinate[] }) {
+  if (boundary.length < 3) return null;
 
-      {boundary.length > 0 && (
-        <Polygon 
-          positions={boundary.map(c => [c.lat, c.lng] as [number, number])} 
-          pathOptions={{ color: 'blue', fillColor: 'transparent', weight: 2 }}
-        />
-      )}
+  const world: [number, number][] = [
+    [85, -180],
+    [85, 180],
+    [-85, 180],
+    [-85, -180]
+  ];
 
-      {layoutImage && imageBounds && (
-        <ImageOverlay
-          url={layoutImage}
-          bounds={imageBounds}
-          opacity={0.6}
-          zIndex={10}
-        />
-      )}
+  return (
+    <Polygon
+      positions={[world, boundary.map(toLatLngTuple)]}
+      pathOptions={{ color: '#111827', fillColor: '#111827', fillOpacity: 0.52, stroke: false, fillRule: 'evenodd' }}
+      interactive={false}
+    />
+  );
+}
 
-      {markers.map((marker) => (
-        <Marker key={marker.id} position={[marker.lat, marker.lng]}>
-          <Popup>
-            <div className="text-center">
-              <strong className="block text-lg">House: {marker.sequenceNumber}</strong>
-              <span className="text-sm text-gray-500">
-                {new Date(marker.timestamp).toLocaleTimeString()}
-              </span>
+function TagEditor({
+  initial,
+  onSave,
+  onDelete,
+  onClose
+}: {
+  initial?: GeoTag;
+  onSave: (data: { label: string; type: TagType; otherLabel?: string }) => void;
+  onDelete?: () => void;
+  onClose: () => void;
+}) {
+  const [label, setLabel] = useState(initial?.label ?? '');
+  const [type, setType] = useState<TagType>(initial?.type ?? 'house');
+  const [otherLabel, setOtherLabel] = useState(initial?.otherLabel ?? '');
+
+  return (
+    <div className="fixed inset-0 z-[2000] grid place-items-end bg-black/35 p-3 sm:place-items-center">
+      <div className="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl">
+        <h2 className="mb-3 text-lg font-semibold text-gray-900">{initial ? 'Edit tag' : 'Add tag'}</h2>
+        <label className="mb-3 block text-sm font-medium text-gray-700">
+          Number or name
+          <input
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            autoFocus
+            className="mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-base text-gray-900 outline-none focus:border-blue-600"
+            placeholder="House 12, Shop A, School"
+          />
+        </label>
+        <div className="mb-3 grid grid-cols-2 gap-2">
+          {(['house', 'business', 'school', 'other'] as TagType[]).map((tagType) => (
+            <button
+              key={tagType}
+              type="button"
+              onClick={() => setType(tagType)}
+              className={`rounded-lg border px-3 py-2 text-sm font-medium capitalize ${
+                type === tagType ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-700'
+              }`}
+            >
+              {tagType}
+            </button>
+          ))}
+        </div>
+        {type === 'other' && (
+          <label className="mb-3 block text-sm font-medium text-gray-700">
+            Specify type
+            <input
+              value={otherLabel}
+              onChange={(event) => setOtherLabel(event.target.value)}
+              className="mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-base text-gray-900 outline-none focus:border-blue-600"
+              placeholder="Temple, office, vacant plot"
+            />
+          </label>
+        )}
+        <div className="flex gap-2">
+          {onDelete && (
+            <button type="button" onClick={onDelete} className="grid h-11 w-11 place-items-center rounded-lg bg-red-50 text-red-600">
+              <Trash2 size={18} />
+            </button>
+          )}
+          <button type="button" onClick={onClose} className="h-11 flex-1 rounded-lg bg-gray-100 font-medium text-gray-700">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => onSave({ label: label.trim(), type, otherLabel: otherLabel.trim() || undefined })}
+            disabled={!label.trim()}
+            className="h-11 flex-1 rounded-lg bg-blue-600 font-medium text-white disabled:opacity-50"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function MapComponent({ project, mode, activeTab, onProjectChange, onResetProject, onReplaceLayout }: MapComponentProps) {
+  const [baseLayer, setBaseLayer] = useState<BaseLayer>('street');
+  const [isPlotting, setIsPlotting] = useState(false);
+  const [selectedOverlay, setSelectedOverlay] = useState(false);
+  const [interactionMode, setInteractionMode] = useState<'map' | 'image'>('map');
+  const [isSetupPanelOpen, setIsSetupPanelOpen] = useState(false);
+  const [isOverlayGestureActive, setIsOverlayGestureActive] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
+  const [mapCenter, setMapCenter] = useState<Coordinate>({ lat: defaultCenter[0], lng: defaultCenter[1] });
+  const [overlayFocus, setOverlayFocus] = useState<Coordinate>({ lat: defaultCenter[0], lng: defaultCenter[1] });
+  const [editingTag, setEditingTag] = useState<GeoTag | null>(null);
+  const [isAddingTag, setIsAddingTag] = useState(false);
+  const mapRef = useRef<L.Map | null>(null);
+  const exportRef = useRef<HTMLDivElement>(null);
+
+  const updateProject = (changes: Partial<CensusProject>) => onProjectChange({ ...project, ...changes });
+  const handleMapReady = useCallback((map: L.Map) => {
+    mapRef.current = map;
+  }, []);
+  const handleCenterChange = useCallback((center: Coordinate) => {
+    setMapCenter((currentCenter) => (isSameCoordinate(currentCenter, center) ? currentCenter : center));
+  }, []);
+  const overlay = project.layoutOverlay;
+  const hasBoundary = project.boundary.length >= 3;
+  const centerForOverlay = overlayFocus;
+
+  const fitBoundary = useMemo(() => (hasBoundary ? project.boundary : []), [hasBoundary, project.boundary]);
+
+  const focusOverlayAt = (coordinate: Coordinate) => {
+    setOverlayFocus(coordinate);
+    if (project.layoutOverlay) {
+      updateProject({ layoutOverlay: { ...project.layoutOverlay, center: coordinate } });
+    }
+  };
+
+  const locateMe = () => {
+    if (!navigator.geolocation) {
+      alert('Location is not supported on this device.');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const coordinate = { lat: position.coords.latitude, lng: position.coords.longitude };
+        setCurrentLocation(coordinate);
+        focusOverlayAt(coordinate);
+        mapRef.current?.flyTo(toLatLngTuple(coordinate), 18);
+      },
+      () => alert('Unable to get location. Please allow location access for this site.'),
+      { enableHighAccuracy: true, timeout: 12000 }
+    );
+  };
+
+  const addBoundaryPoint = (point: Coordinate) => {
+    updateProject({ boundary: [...project.boundary, point], isBoundaryConfirmed: false });
+  };
+
+  const confirmBoundary = () => {
+    if (!hasBoundary) {
+      alert('Add at least 3 boundary points before confirming.');
+      return;
+    }
+
+    setIsPlotting(false);
+    updateProject({ isBoundaryConfirmed: true });
+  };
+
+  const addLayoutToMap = () => {
+    updateProject({ layoutOverlay: createDefaultOverlay(centerForOverlay, project.layoutImageAspectRatio) });
+    setSelectedOverlay(true);
+    setInteractionMode('image');
+    setIsSetupPanelOpen(true);
+  };
+
+  const saveTag = (data: { label: string; type: TagType; otherLabel?: string }) => {
+    if (editingTag) {
+      updateProject({
+        tags: project.tags.map((tag) => (tag.id === editingTag.id ? { ...tag, ...data } : tag))
+      });
+      setEditingTag(null);
+      return;
+    }
+
+    const coordinate = currentLocation ?? mapCenter;
+    if (!isPointInsideBoundary(coordinate, project.boundary)) {
+      const shouldContinue = window.confirm('This point is outside your confirmed boundary. Add it anyway?');
+      if (!shouldContinue) return;
+    }
+
+    const nextTag: GeoTag = {
+      id: `${Date.now()}`,
+      lat: coordinate.lat,
+      lng: coordinate.lng,
+      timestamp: Date.now(),
+      ...data
+    };
+
+    updateProject({ tags: [...project.tags, nextTag] });
+    setIsAddingTag(false);
+  };
+
+  const deleteTag = (id: string) => {
+    updateProject({ tags: project.tags.filter((tag) => tag.id !== id) });
+    setEditingTag(null);
+  };
+
+  const exportMap = async () => {
+    if (!exportRef.current) return;
+
+    try {
+      const dataUrl = await toPng(exportRef.current, {
+        cacheBust: true,
+        pixelRatio: 2,
+        filter: (node) => !(node instanceof HTMLElement && node.dataset.exportHidden === 'true')
+      });
+      const link = document.createElement('a');
+      link.download = `census-map-${new Date().toISOString().slice(0, 10)}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      console.error('Map export failed', err);
+      alert('Export failed. Try switching to road map and export again.');
+    }
+  };
+
+  if (activeTab === 'profile') {
+    return (
+      <div className="flex min-h-dvh flex-col bg-gray-50 px-4 pb-24 pt-6">
+        <div className="mx-auto w-full max-w-md rounded-xl bg-white p-4 shadow-sm">
+          <h1 className="text-xl font-semibold text-gray-900">Profile</h1>
+          <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+            <div className="rounded-lg bg-gray-50 p-3">
+              <span className="block text-gray-500">Boundary points</span>
+              <strong className="text-lg text-gray-900">{project.boundary.length}</strong>
             </div>
-          </Popup>
-        </Marker>
-      ))}
-    </MapContainer>
+            <div className="rounded-lg bg-gray-50 p-3">
+              <span className="block text-gray-500">Tags added</span>
+              <strong className="text-lg text-gray-900">{project.tags.length}</strong>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onReplaceLayout}
+            className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-gray-900 font-medium text-white"
+          >
+            <ImageUp size={18} />
+            Change layout map
+          </button>
+          <button
+            type="button"
+            onClick={onResetProject}
+            className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-red-600 font-medium text-white"
+          >
+            <Trash2 size={18} />
+            Delete map and start over
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={exportRef} className="relative h-dvh w-screen overflow-hidden bg-white">
+      <MapContainer center={defaultCenter} zoom={16} minZoom={mapMinZoom} maxZoom={mapMaxZoom} zoomControl={false} className="h-full w-full">
+        <MapBridge onReady={handleMapReady} onCenterChange={handleCenterChange} />
+        <MapGestureMode locked={mode === 'setup' && isOverlayGestureActive} />
+        <LocateOnMount
+          onLocation={(coordinate) => {
+            setCurrentLocation(coordinate);
+            focusOverlayAt(coordinate);
+          }}
+        />
+        <FittedBoundary boundary={fitBoundary} />
+        <TileLayer
+          attribution={tileLayers[baseLayer].attribution}
+          url={tileLayers[baseLayer].url}
+          minZoom={mapMinZoom}
+          maxZoom={mapMaxZoom}
+          maxNativeZoom={19}
+        />
+        <SearchBox onLocationSelect={focusOverlayAt} />
+        <MapActions
+          baseLayer={baseLayer}
+          onBaseLayerChange={() => setBaseLayer(baseLayer === 'street' ? 'satellite' : 'street')}
+          onLocate={locateMe}
+          onZoomIn={() => mapRef.current?.zoomIn()}
+          onZoomOut={() => mapRef.current?.zoomOut()}
+        />
+        <ClickToPlot
+          enabled={mode === 'setup' && isPlotting}
+          onAddPoint={addBoundaryPoint}
+          onMapInteraction={() => setInteractionMode('map')}
+        />
+
+        {project.layoutImage && overlay && (
+          <LayoutImageOverlay
+            image={project.layoutImage}
+            overlay={overlay}
+            selected={selectedOverlay}
+            onSelect={() => {
+              setSelectedOverlay(true);
+              setInteractionMode('image');
+              setIsPlotting(false);
+            }}
+            onGestureStart={() => setIsOverlayGestureActive(true)}
+            onGestureEnd={() => setIsOverlayGestureActive(false)}
+            onChange={(layoutOverlay) => updateProject({ layoutOverlay })}
+          />
+        )}
+
+        {currentLocation && (
+          <Marker position={toLatLngTuple(currentLocation)}>
+            <Popup>Your current location</Popup>
+          </Marker>
+        )}
+
+        {project.isBoundaryConfirmed && <BoundaryMask boundary={project.boundary} />}
+        {project.boundary.length > 0 && (
+          <>
+            <Polygon
+              positions={project.boundary.map(toLatLngTuple)}
+              pathOptions={{ color: '#ffffff', fillColor: '#2563eb', fillOpacity: mode === 'setup' ? 0.08 : 0.03, weight: 6 }}
+              interactive={false}
+            />
+            <Polyline positions={[...project.boundary, project.boundary[0]].map(toLatLngTuple)} pathOptions={{ color: '#2563eb', weight: 3 }} />
+          </>
+        )}
+
+        {project.boundary.map((point, index) => (
+          <Marker
+            key={`${point.lat}-${point.lng}-${index}`}
+            position={toLatLngTuple(point)}
+            icon={L.divIcon({
+              className: 'boundary-point-icon',
+              html: `<span>${index + 1}</span>`,
+              iconSize: [26, 26],
+              iconAnchor: [13, 13]
+            })}
+          />
+        ))}
+
+        {project.tags.map((tag) => (
+          <Marker key={tag.id} position={[tag.lat, tag.lng]} icon={createTagIcon(tag)} eventHandlers={{ click: () => setEditingTag(tag) }}>
+            <Popup>
+              <strong>{tag.label}</strong>
+              <br />
+              <span>{tag.type === 'other' ? tag.otherLabel ?? 'Other' : tag.type}</span>
+            </Popup>
+          </Marker>
+        ))}
+      </MapContainer>
+
+      {mode === 'setup' && (
+        <div
+          data-export-hidden="true"
+          className="absolute inset-x-2 bottom-3 z-[1000] mx-auto max-w-xl rounded-xl border border-gray-200 bg-white/95 p-2 shadow-xl backdrop-blur"
+        >
+          <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-semibold text-gray-900">Boundary · {project.boundary.length} points</p>
+              <p className="truncate text-[11px] font-medium text-gray-500">{interactionMode === 'image' ? 'Image selected' : 'Map selected'}</p>
+            </div>
+            <div className="flex shrink-0 gap-1 overflow-x-auto">
+              <ControlButton title="Add layout map" onClick={addLayoutToMap} active={Boolean(overlay?.isVisible)}>
+                <Eye size={18} />
+              </ControlButton>
+              <ControlButton title="Change uploaded layout image" onClick={onReplaceLayout}>
+                <ImageUp size={18} />
+              </ControlButton>
+              {overlay && (
+                <>
+                  <ControlButton
+                    title={overlay.isLocked ? 'Unlock layout map' : 'Lock layout map'}
+                    onClick={() => updateProject({ layoutOverlay: { ...overlay, isLocked: !overlay.isLocked } })}
+                    active={overlay.isLocked}
+                  >
+                    {overlay.isLocked ? <Lock size={17} /> : <Unlock size={17} />}
+                  </ControlButton>
+                  <ControlButton
+                    title={overlay.isVisible ? 'Hide layout map' : 'Show layout map'}
+                    onClick={() => updateProject({ layoutOverlay: { ...overlay, isVisible: !overlay.isVisible } })}
+                  >
+                    {overlay.isVisible ? <EyeOff size={17} /> : <Eye size={17} />}
+                  </ControlButton>
+                </>
+              )}
+              <ControlButton
+                title={isPlotting ? 'Stop plotting' : 'Start plotting'}
+                onClick={() => {
+                  setInteractionMode('map');
+                  setIsPlotting(!isPlotting);
+                }}
+                active={isPlotting}
+              >
+                <Edit3 size={18} />
+              </ControlButton>
+              <ControlButton
+                title="Undo last boundary point"
+                onClick={() => updateProject({ boundary: project.boundary.slice(0, -1), isBoundaryConfirmed: false })}
+                disabled={project.boundary.length === 0}
+              >
+                <RotateCcw size={17} />
+              </ControlButton>
+              <ControlButton
+                title={isSetupPanelOpen ? 'Minimize toolbar' : 'Expand toolbar'}
+                onClick={() => setIsSetupPanelOpen(!isSetupPanelOpen)}
+                active={isSetupPanelOpen}
+              >
+                {isSetupPanelOpen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+              </ControlButton>
+            </div>
+          </div>
+
+          {isSetupPanelOpen && (
+            <div className="mt-2 grid gap-2 border-t border-gray-100 pt-2">
+              {overlay && (
+                <div className="grid gap-2 sm:grid-cols-3 sm:items-end">
+                  <label className="mb-2 block text-xs font-medium text-blue-950">
+                    Opacity
+                    <input
+                      type="range"
+                      min="0.15"
+                      max="1"
+                      step="0.05"
+                      value={overlay.opacity}
+                      onChange={(event) => updateProject({ layoutOverlay: { ...overlay, opacity: Number(event.target.value) } })}
+                      className="w-full"
+                    />
+                  </label>
+                  <label className="mb-2 block text-xs font-medium text-blue-950">
+                    Size
+                    <input
+                      type="range"
+                      min="120"
+                      max="1400"
+                      step="20"
+                      value={overlay.widthMeters}
+                      onChange={(event) => {
+                        const widthMeters = Number(event.target.value);
+                        updateProject({
+                          layoutOverlay: {
+                            ...overlay,
+                            widthMeters,
+                            heightMeters: widthMeters / Math.max(0.1, overlay.aspectRatio)
+                          }
+                        });
+                      }}
+                      className="w-full"
+                    />
+                  </label>
+                  <label className="block text-xs font-medium text-blue-950">
+                    Rotate
+                    <input
+                      type="range"
+                      min="-180"
+                      max="180"
+                      step="1"
+                      value={overlay.rotation}
+                      onChange={(event) => updateProject({ layoutOverlay: { ...overlay, rotation: Number(event.target.value) } })}
+                      className="w-full"
+                    />
+                  </label>
+                </div>
+              )}
+              <div className="flex gap-2">
+                <ControlButton title="Clear boundary" onClick={() => updateProject({ boundary: [], isBoundaryConfirmed: false })} disabled={project.boundary.length === 0}>
+                  <Trash2 size={18} />
+                </ControlButton>
+                <button
+                  type="button"
+                  onClick={confirmBoundary}
+                  disabled={!hasBoundary}
+                  className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-medium text-white disabled:bg-blue-300"
+                >
+                  <Check size={18} />
+                  Confirm boundary
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {mode === 'field' && (
+        <div data-export-hidden="true" className="absolute inset-x-3 bottom-20 z-[1000] flex gap-2">
+          <button type="button" onClick={() => setIsAddingTag(true)} className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 font-semibold text-white shadow-lg">
+            <MapPin size={18} />
+            Add tag
+          </button>
+          <button type="button" onClick={exportMap} className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg" title="Export map">
+            <Download size={19} />
+          </button>
+          <button
+            type="button"
+            onClick={() => updateProject({ isBoundaryConfirmed: false })}
+            className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg"
+            title="Edit boundary"
+          >
+            <Move size={19} />
+          </button>
+        </div>
+      )}
+
+      {isAddingTag && <TagEditor onClose={() => setIsAddingTag(false)} onSave={saveTag} />}
+      {editingTag && (
+        <TagEditor
+          initial={editingTag}
+          onClose={() => setEditingTag(null)}
+          onSave={saveTag}
+          onDelete={() => deleteTag(editingTag.id)}
+        />
+      )}
+
+      <div data-export-hidden="true" className="pointer-events-none absolute left-3 top-16 z-[900] rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-gray-700 shadow-sm">
+        <Crosshair size={14} className="mr-1 inline text-blue-600" />
+        {tileLayers[baseLayer].label}
+      </div>
+    </div>
   );
 }

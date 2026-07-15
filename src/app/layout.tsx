@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -16,8 +16,14 @@ export const metadata: Metadata = {
   title: "CensusBlock Mapper",
   description: "Offline PWA for Census Enumerators",
   manifest: "/manifest.json",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
   themeColor: "#000000",
-  viewport: "minimum-scale=1, initial-scale=1, width=device-width, shrink-to-fit=no, user-scalable=no, viewport-fit=cover",
 };
 
 export default function RootLayout({

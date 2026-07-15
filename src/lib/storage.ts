@@ -1,78 +1,98 @@
 import localforage from 'localforage';
 
-export type GeoTag = {
-  id: string;
-  lat: number;
-  lng: number;
-  sequenceNumber: string;
-  timestamp: number;
-};
-
 export type Coordinate = {
   lat: number;
   lng: number;
 };
 
-const MARKERS_KEY = 'census-mapper-markers';
-const BOUNDARY_KEY = 'census-mapper-boundary';
-const LAYOUT_MAP_KEY = 'census-mapper-layout-image';
+export type TagType = 'house' | 'business' | 'school' | 'other';
 
-export const saveMarker = (marker: GeoTag) => {
-  if (typeof window === 'undefined') return;
-  const markers = getMarkers();
-  markers.push(marker);
-  localStorage.setItem(MARKERS_KEY, JSON.stringify(markers));
+export type GeoTag = {
+  id: string;
+  lat: number;
+  lng: number;
+  label: string;
+  type: TagType;
+  otherLabel?: string;
+  timestamp: number;
 };
 
-export const updateMarker = (id: string, updatedMarker: Partial<GeoTag>) => {
-  if (typeof window === 'undefined') return;
-  const markers = getMarkers();
-  const index = markers.findIndex(m => m.id === id);
-  if (index !== -1) {
-    markers[index] = { ...markers[index], ...updatedMarker };
-    localStorage.setItem(MARKERS_KEY, JSON.stringify(markers));
-  }
+export type LayoutOverlay = {
+  center: Coordinate;
+  widthMeters: number;
+  heightMeters: number;
+  aspectRatio: number;
+  rotation: number;
+  opacity: number;
+  isLocked: boolean;
+  isVisible: boolean;
 };
 
-export const getMarkers = (): GeoTag[] => {
-  if (typeof window === 'undefined') return [];
-  const markers = localStorage.getItem(MARKERS_KEY);
-  return markers ? JSON.parse(markers) : [];
+export type CensusProject = {
+  layoutImage: string | null;
+  layoutImageAspectRatio: number;
+  layoutOverlay: LayoutOverlay | null;
+  boundary: Coordinate[];
+  isBoundaryConfirmed: boolean;
+  tags: GeoTag[];
 };
 
-export const saveBoundary = (coordinates: Coordinate[]) => {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(BOUNDARY_KEY, JSON.stringify(coordinates));
+const PROJECT_KEY = 'census-mapper-project-v2';
+
+export const emptyProject: CensusProject = {
+  layoutImage: null,
+  layoutImageAspectRatio: 1,
+  layoutOverlay: null,
+  boundary: [],
+  isBoundaryConfirmed: false,
+  tags: []
 };
 
-export const getBoundary = (): Coordinate[] => {
-  if (typeof window === 'undefined') return [];
-  const boundary = localStorage.getItem(BOUNDARY_KEY);
-  return boundary ? JSON.parse(boundary) : [];
+const normalizeProject = (project: Partial<CensusProject> | null): CensusProject => {
+  const layoutImageAspectRatio = project?.layoutImageAspectRatio ?? project?.layoutOverlay?.aspectRatio ?? 1;
+  const overlayAspectRatio = project?.layoutOverlay?.aspectRatio ?? layoutImageAspectRatio;
+
+  return {
+    ...emptyProject,
+    ...project,
+    layoutImageAspectRatio,
+    tags: project?.tags ?? [],
+    boundary: project?.boundary ?? [],
+    layoutOverlay: project?.layoutOverlay
+      ? {
+          ...project.layoutOverlay,
+          aspectRatio: overlayAspectRatio,
+          heightMeters: project.layoutOverlay.aspectRatio
+            ? project.layoutOverlay.heightMeters
+            : project.layoutOverlay.widthMeters / Math.max(0.1, overlayAspectRatio)
+        }
+      : null
+  };
 };
 
-export const saveLayoutMap = async (base64Image: string): Promise<void> => {
-  if (typeof window === 'undefined') return;
+export const getProject = async (): Promise<CensusProject> => {
+  if (typeof window === 'undefined') return emptyProject;
+
   try {
-    await localforage.setItem(LAYOUT_MAP_KEY, base64Image);
+    const project = await localforage.getItem<CensusProject>(PROJECT_KEY);
+    return normalizeProject(project);
   } catch (err) {
-    console.error("Error saving layout map", err);
+    console.error('Error loading project', err);
+    return emptyProject;
   }
 };
 
-export const getLayoutMap = async (): Promise<string | null> => {
-  if (typeof window === 'undefined') return null;
-  try {
-    return await localforage.getItem<string>(LAYOUT_MAP_KEY);
-  } catch (err) {
-    console.error("Error getting layout map", err);
-    return null;
-  }
-};
-
-export const clearData = async () => {
+export const saveProject = async (project: CensusProject): Promise<void> => {
   if (typeof window === 'undefined') return;
-  localStorage.removeItem(MARKERS_KEY);
-  localStorage.removeItem(BOUNDARY_KEY);
-  await localforage.removeItem(LAYOUT_MAP_KEY);
+
+  try {
+    await localforage.setItem(PROJECT_KEY, project);
+  } catch (err) {
+    console.error('Error saving project', err);
+  }
+};
+
+export const clearProject = async (): Promise<void> => {
+  if (typeof window === 'undefined') return;
+  await localforage.removeItem(PROJECT_KEY);
 };

@@ -24,3 +24,50 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+html,
+body {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+.leaflet-container {
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+.census-tag-icon,
+.boundary-point-icon {
+  background: transparent;
+  border: 0;
+}
+
+.census-tag-icon span {
+  align-items: center;
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.28);
+  color: #ffffff;
+  display: flex;
+  font-size: 12px;
+  font-weight: 800;
+  height: 34px;
+  justify-content: center;
+  line-height: 1;
+  min-width: 34px;
+  padding: 0 5px;
+  white-space: nowrap;
+}
+
+.boundary-point-icon span {
+  align-items: center;
+  background: #ffffff;
+  border: 2px solid #2563eb;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.18);
+  color: #1d4ed8;
+  display: flex;
+  font-size: 12px;
+  font-weight: 800;
+  height: 26px;
+  justify-content: center;
+  width: 26px;
+}
