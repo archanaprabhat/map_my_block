@@ -60,10 +60,10 @@ body {
 .boundary-point-icon span {
   align-items: center;
   background: #ffffff;
-  border: 2px solid #2563eb;
+  border: 2px solid #21216b;
   border-radius: 999px;
   box-shadow: 0 2px 8px rgb(15 23 42 / 0.18);
-  color: #1d4ed8;
+  color: #21216b;
   display: flex;
   font-size: 12px;
   font-weight: 800;

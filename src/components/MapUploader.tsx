@@ -6,6 +6,8 @@ import Cropper, { ReactCropperElement } from 'react-cropper';
 import 'cropperjs/dist/cropper.css';
 import { UploadCloud, Check, X } from 'lucide-react';
 
+const primaryColor = '#21216b';
+
 interface MapUploaderProps {
   onSave: (base64Image: string, aspectRatio: number) => void;
   onCancel?: () => void;
@@ -78,8 +80,9 @@ export default function MapUploader({
           <div
             {...getRootProps()}
             className={`w-full border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer transition-colors ${
-              isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:bg-gray-50'
+              isDragActive ? 'bg-indigo-50' : 'border-gray-300 hover:bg-gray-50'
             }`}
+            style={isDragActive ? { borderColor: primaryColor } : undefined}
           >
             <input {...getInputProps()} />
             <UploadCloud size={48} className="text-gray-400 mb-4" />
@@ -121,7 +124,8 @@ export default function MapUploader({
               <button
                 onClick={handleCropAndSave}
                 disabled={!isCropperReady}
-                className="flex-[2] py-3 px-4 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 transition flex items-center justify-center shadow-md active:scale-95 disabled:cursor-not-allowed disabled:bg-blue-300 disabled:shadow-none disabled:active:scale-100"
+                className="flex-[2] py-3 px-4 text-white font-medium rounded-xl transition flex items-center justify-center shadow-md active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none disabled:active:scale-100"
+                style={isCropperReady ? { backgroundColor: primaryColor } : undefined}
               >
                 <Check size={20} className="mr-2" />
                 Crop & Save

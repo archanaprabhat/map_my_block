@@ -6,9 +6,15 @@ import { Map, User } from 'lucide-react';
 import MapUploader from '../components/MapUploader';
 import { CensusProject, clearProject, emptyProject, getProject, saveProject } from '../lib/storage';
 
+const primaryColor = '#21216b';
+
 const MapComponent = dynamic(() => import('../components/MapComponent'), {
   ssr: false,
-  loading: () => <div className="grid h-dvh w-screen place-items-center bg-white text-sm font-medium text-blue-600">Loading map...</div>
+  loading: () => (
+    <div className="grid h-dvh w-screen place-items-center bg-white text-sm font-medium" style={{ color: primaryColor }}>
+      Loading map...
+    </div>
+  )
 });
 
 type MainTab = 'map' | 'profile';
@@ -70,7 +76,11 @@ export default function Home() {
   };
 
   if (isInitializing) {
-    return <div className="grid h-dvh w-screen place-items-center bg-white text-sm font-medium text-blue-600">Initializing...</div>;
+    return (
+      <div className="grid h-dvh w-screen place-items-center bg-white text-sm font-medium" style={{ color: primaryColor }}>
+        Initializing...
+      </div>
+    );
   }
 
   if (!project.layoutImage) {
@@ -106,9 +116,8 @@ export default function Home() {
           <button
             type="button"
             onClick={() => setActiveTab('map')}
-            className={`flex flex-col items-center justify-center gap-1 text-xs font-medium ${
-              activeTab === 'map' ? 'text-blue-600' : 'text-gray-500'
-            }`}
+            className="flex flex-col items-center justify-center gap-1 text-xs font-medium"
+            style={{ color: activeTab === 'map' ? primaryColor : '#6b7280' }}
           >
             <Map size={21} />
             Map
@@ -116,9 +125,8 @@ export default function Home() {
           <button
             type="button"
             onClick={() => setActiveTab('profile')}
-            className={`flex flex-col items-center justify-center gap-1 text-xs font-medium ${
-              activeTab === 'profile' ? 'text-blue-600' : 'text-gray-500'
-            }`}
+            className="flex flex-col items-center justify-center gap-1 text-xs font-medium"
+            style={{ color: activeTab === 'profile' ? primaryColor : '#6b7280' }}
           >
             <User size={21} />
             Profile

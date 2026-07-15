@@ -22,6 +22,7 @@ import {
   Move,
   Plus,
   RotateCcw,
+  RotateCw,
   Search,
   Trash2,
   Unlock,
@@ -53,8 +54,9 @@ type SearchResult = {
 const defaultCenter: [number, number] = [10.8505, 76.2711];
 const mapMinZoom = 0;
 const mapMaxZoom = 19;
+const primaryColor = '#21216b';
 const tagColors: Record<TagType, string> = {
-  house: '#2563eb',
+  house: primaryColor,
   business: '#f97316',
   school: '#16a34a',
   other: '#7c3aed'
@@ -140,8 +142,9 @@ const ControlButton = ({
     onClick={onClick}
     disabled={disabled}
     className={`grid h-11 w-11 place-items-center rounded-lg border text-gray-800 shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
-      active ? 'border-blue-600 bg-blue-600 text-white' : 'border-gray-200 bg-white hover:bg-gray-50'
+      active ? 'text-white' : 'border-gray-200 bg-white hover:bg-gray-50'
     }`}
+    style={active ? { backgroundColor: primaryColor, borderColor: primaryColor } : undefined}
   >
     {children}
   </button>
@@ -182,6 +185,7 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
   const map = useMap();
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
+  const [activeResult, setActiveResult] = useState<SearchResult | null>(null);
   const skipNextSearch = useRef(false);
 
   useEffect(() => {
@@ -220,6 +224,7 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
     onLocationSelect(coordinate);
     map.flyTo(toLatLngTuple(coordinate), 17);
     setQuery(result.display_name);
+    setActiveResult(result);
     setResults([]);
   };
 
@@ -227,16 +232,31 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
     skipNextSearch.current = true;
     setQuery('');
     setResults([]);
+    setActiveResult(null);
+  };
+
+  const submitSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const exactActiveQuery = activeResult && query.trim() === activeResult.display_name;
+    if (exactActiveQuery) {
+      selectResult(activeResult);
+      return;
+    }
+
+    if (results.length > 0) {
+      selectResult(results[0]);
+    }
   };
 
   return (
     <div className="absolute left-3 right-[4.25rem] top-3 z-[1000]">
-      <div className="relative">
+      <form className="relative" onSubmit={submitSearch}>
         <Search size={18} className="pointer-events-none absolute left-3 top-3.5 text-gray-400" />
         <input
           value={query}
           onChange={(event) => {
             setQuery(event.target.value);
+            setActiveResult(null);
             if (event.target.value.trim().length < 3) setResults([]);
           }}
           className="h-11 w-full rounded-lg border border-gray-200 bg-white pl-10 pr-10 text-sm text-gray-900 shadow-sm outline-none focus:border-blue-600"
@@ -268,7 +288,7 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
             ))}
           </div>
         )}
-      </div>
+      </form>
     </div>
   );
 }
@@ -391,6 +411,7 @@ function LayoutImageOverlay({
   image,
   overlay,
   selected,
+  plotting,
   onSelect,
   onGestureStart,
   onGestureEnd,
@@ -399,6 +420,7 @@ function LayoutImageOverlay({
   image: string;
   overlay: LayoutOverlay;
   selected: boolean;
+  plotting: boolean;
   onSelect: () => void;
   onGestureStart: () => void;
   onGestureEnd: () => void;
@@ -406,25 +428,55 @@ function LayoutImageOverlay({
 }) {
   const map = useMap();
   const [style, setStyle] = useState<React.CSSProperties>({});
-  const dragStart = useRef<{ pointer: L.Point; center: Coordinate } | null>(null);
+  const transformStart = useRef<{
+    mode: 'move' | 'resize' | 'rotate';
+    pointer: L.Point;
+    center: Coordinate;
+    widthMeters?: number;
+    rotation?: number;
+    startAngle?: number;
+    resizeDirection?: { x: -1 | 0 | 1; y: -1 | 0 | 1 };
+    pixelWidth?: number;
+  } | null>(null);
 
   const updatePosition = useCallback(() => {
-    const center = map.latLngToContainerPoint([overlay.center.lat, overlay.center.lng]);
-    const lngMeters = Math.max(1, 111320 * Math.cos((overlay.center.lat * Math.PI) / 180));
-    const widthPoint = map.latLngToContainerPoint([overlay.center.lat, overlay.center.lng + overlay.widthMeters / lngMeters]);
-    const width = Math.max(80, Math.abs(widthPoint.x - center.x));
-    const height = width / Math.max(0.1, overlay.aspectRatio);
+    const centerLatLng = L.latLng(overlay.center.lat, overlay.center.lng);
+    const center = map.latLngToContainerPoint(centerLatLng);
+    const crs = map.options.crs ?? L.CRS.EPSG3857;
+    const projectedCenter = crs.project(centerLatLng);
+    const projectedScale = 1 / Math.max(0.000001, Math.cos((overlay.center.lat * Math.PI) / 180));
+    const halfWidth = (overlay.widthMeters * projectedScale) / 2;
+    const heightMeters = overlay.heightMeters || overlay.widthMeters / Math.max(0.1, overlay.aspectRatio);
+    const halfHeight = (heightMeters * projectedScale) / 2;
+    const west = map.latLngToContainerPoint(crs.unproject(L.point(projectedCenter.x - halfWidth, projectedCenter.y)));
+    const east = map.latLngToContainerPoint(crs.unproject(L.point(projectedCenter.x + halfWidth, projectedCenter.y)));
+    const north = map.latLngToContainerPoint(crs.unproject(L.point(projectedCenter.x, projectedCenter.y + halfHeight)));
+    const south = map.latLngToContainerPoint(crs.unproject(L.point(projectedCenter.x, projectedCenter.y - halfHeight)));
+    const width = Math.abs(east.x - west.x);
+    const height = Math.abs(north.y - south.y);
 
     setStyle({
       left: center.x,
       top: center.y,
       width,
       height,
+      aspectRatio: overlay.aspectRatio,
       opacity: overlay.opacity,
       transform: `translate(-50%, -50%) rotate(${overlay.rotation}deg)`,
-      pointerEvents: overlay.isLocked ? 'none' : 'auto'
+      pointerEvents: plotting || overlay.isLocked ? 'none' : 'auto'
     });
-  }, [map, overlay.aspectRatio, overlay.center.lat, overlay.center.lng, overlay.isLocked, overlay.opacity, overlay.rotation, overlay.widthMeters]);
+  }, [
+    map,
+    overlay.aspectRatio,
+    overlay.center.lat,
+    overlay.center.lng,
+    overlay.heightMeters,
+    overlay.isLocked,
+    overlay.opacity,
+    overlay.rotation,
+    overlay.widthMeters,
+    plotting
+  ]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(updatePosition);
@@ -435,55 +487,156 @@ function LayoutImageOverlay({
     };
   }, [map, updatePosition]);
 
-  const startDrag = (event: React.PointerEvent<HTMLImageElement>) => {
+  const startMove = (event: React.PointerEvent<HTMLElement>) => {
     event.preventDefault();
     event.stopPropagation();
     onSelect();
     if (overlay.isLocked) return;
     onGestureStart();
     event.currentTarget.setPointerCapture(event.pointerId);
-    dragStart.current = {
+    transformStart.current = {
+      mode: 'move',
       pointer: L.point(event.clientX, event.clientY),
       center: overlay.center
     };
   };
 
-  const drag = (event: React.PointerEvent<HTMLImageElement>) => {
+  const startResize = (direction: { x: -1 | 0 | 1; y: -1 | 0 | 1 }) => (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
     event.stopPropagation();
-    if (!dragStart.current || overlay.isLocked) return;
-    const startPoint = map.latLngToContainerPoint([dragStart.current.center.lat, dragStart.current.center.lng]);
-    const nextPoint = startPoint.add(L.point(event.clientX, event.clientY).subtract(dragStart.current.pointer));
-    const nextCenter = map.containerPointToLatLng(nextPoint);
-    onChange({ ...overlay, center: { lat: nextCenter.lat, lng: nextCenter.lng } });
+    onSelect();
+    if (overlay.isLocked) return;
+    onGestureStart();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    transformStart.current = {
+      mode: 'resize',
+      pointer: L.point(event.clientX, event.clientY),
+      center: overlay.center,
+      widthMeters: overlay.widthMeters,
+      rotation: overlay.rotation,
+      resizeDirection: direction,
+      pixelWidth: Number(style.width) || 1
+    };
   };
 
-  const endDrag = () => {
+  const startRotate = (event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onSelect();
+    if (overlay.isLocked) return;
+    onGestureStart();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const center = map.latLngToContainerPoint([overlay.center.lat, overlay.center.lng]);
+    const pointer = L.point(event.clientX, event.clientY);
+    transformStart.current = {
+      mode: 'rotate',
+      pointer,
+      center: overlay.center,
+      widthMeters: overlay.widthMeters,
+      rotation: overlay.rotation,
+      startAngle: Math.atan2(pointer.y - center.y, pointer.x - center.x)
+    };
+  };
+
+  const transform = (event: React.PointerEvent<HTMLElement>) => {
+    event.stopPropagation();
+    const start = transformStart.current;
+    if (!start || overlay.isLocked) return;
+
+    const pointer = L.point(event.clientX, event.clientY);
+    if (start.mode === 'move') {
+      const startPoint = map.latLngToContainerPoint([start.center.lat, start.center.lng]);
+      const nextPoint = startPoint.add(pointer.subtract(start.pointer));
+      const nextCenter = map.containerPointToLatLng(nextPoint);
+      onChange({ ...overlay, center: { lat: nextCenter.lat, lng: nextCenter.lng } });
+      return;
+    }
+
+    if (start.mode === 'resize') {
+      const direction = start.resizeDirection ?? { x: 1, y: 0 };
+      const radians = ((start.rotation ?? overlay.rotation) * Math.PI) / 180;
+      const dx = pointer.x - start.pointer.x;
+      const dy = pointer.y - start.pointer.y;
+      const localX = dx * Math.cos(radians) + dy * Math.sin(radians);
+      const localY = -dx * Math.sin(radians) + dy * Math.cos(radians);
+      const directionalDelta = direction.x * localX + direction.y * localY * overlay.aspectRatio;
+      const startWidthMeters = start.widthMeters ?? overlay.widthMeters;
+      const metersPerPixel = startWidthMeters / Math.max(1, start.pixelWidth ?? 1);
+      const widthMeters = Math.max(60, Math.min(2200, startWidthMeters + directionalDelta * metersPerPixel));
+      onChange({ ...overlay, widthMeters, heightMeters: widthMeters / Math.max(0.1, overlay.aspectRatio) });
+      return;
+    }
+
+    const center = map.latLngToContainerPoint([overlay.center.lat, overlay.center.lng]);
+    const angle = Math.atan2(pointer.y - center.y, pointer.x - center.x);
+    const delta = ((angle - (start.startAngle ?? angle)) * 180) / Math.PI;
+    onChange({ ...overlay, rotation: (start.rotation ?? overlay.rotation) + delta });
+  };
+
+  const endTransform = () => {
     onGestureEnd();
-    dragStart.current = null;
+    transformStart.current = null;
   };
 
   if (!overlay.isVisible) return null;
 
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={image}
-      alt=""
-      onPointerDown={startDrag}
-      onPointerMove={drag}
-      onPointerUp={endDrag}
-      onPointerCancel={endDrag}
-      onLostPointerCapture={endDrag}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSelect();
-      }}
-      className={`absolute z-[550] touch-none select-none object-fill ${
-        selected ? 'outline outline-3 outline-blue-500' : 'outline outline-1 outline-white/70'
+    <div
+      onPointerDown={startMove}
+      onPointerMove={transform}
+      onPointerUp={endTransform}
+      onPointerCancel={endTransform}
+      onLostPointerCapture={endTransform}
+      className={`absolute z-[550] touch-none select-none ${
+        selected ? 'outline outline-3' : 'outline outline-1 outline-white/70'
       } ${overlay.isLocked ? 'cursor-default' : 'cursor-move'}`}
-      style={style}
-      draggable={false}
-    />
+      style={{ ...style, outlineColor: selected ? primaryColor : undefined }}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={image} alt="" className="h-full w-full object-contain" draggable={false} />
+      {selected && !overlay.isLocked && !plotting && (
+        <>
+          {[
+            ['nw', -1, -1, 'left-0 top-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize'],
+            ['n', 0, -1, 'left-1/2 top-0 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize'],
+            ['ne', 1, -1, 'right-0 top-0 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize'],
+            ['e', 1, 0, 'right-0 top-1/2 -translate-y-1/2 translate-x-1/2 cursor-ew-resize'],
+            ['se', 1, 1, 'bottom-0 right-0 translate-x-1/2 translate-y-1/2 cursor-nwse-resize'],
+            ['s', 0, 1, 'bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 cursor-ns-resize'],
+            ['sw', -1, 1, 'bottom-0 left-0 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize'],
+            ['w', -1, 0, 'left-0 top-1/2 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize']
+          ].map(([key, x, y, className]) => (
+            <button
+              key={key}
+              type="button"
+              title="Resize layout map"
+              aria-label="Resize layout map"
+              onPointerDown={startResize({ x: x as -1 | 0 | 1, y: y as -1 | 0 | 1 })}
+              onPointerMove={transform}
+              onPointerUp={endTransform}
+              onPointerCancel={endTransform}
+              onLostPointerCapture={endTransform}
+              className={`absolute h-5 w-5 rounded-full border-2 border-white shadow ${className}`}
+              style={{ backgroundColor: primaryColor }}
+            />
+          ))}
+          <button
+            type="button"
+            title="Rotate layout map"
+            aria-label="Rotate layout map"
+            onPointerDown={startRotate}
+            onPointerMove={transform}
+            onPointerUp={endTransform}
+            onPointerCancel={endTransform}
+            onLostPointerCapture={endTransform}
+            className="absolute left-1/2 top-0 grid h-9 w-9 -translate-x-1/2 -translate-y-14 place-items-center rounded-full border-2 border-white text-white shadow-lg"
+            style={{ backgroundColor: primaryColor }}
+          >
+            <RotateCw size={18} />
+          </button>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -541,9 +694,8 @@ function TagEditor({
               key={tagType}
               type="button"
               onClick={() => setType(tagType)}
-              className={`rounded-lg border px-3 py-2 text-sm font-medium capitalize ${
-                type === tagType ? 'border-blue-600 bg-blue-50 text-blue-700' : 'border-gray-200 text-gray-700'
-              }`}
+              className={`rounded-lg border px-3 py-2 text-sm font-medium capitalize ${type === tagType ? 'bg-indigo-50' : 'border-gray-200 text-gray-700'}`}
+              style={type === tagType ? { borderColor: primaryColor, color: primaryColor } : undefined}
             >
               {tagType}
             </button>
@@ -573,7 +725,8 @@ function TagEditor({
             type="button"
             onClick={() => onSave({ label: label.trim(), type, otherLabel: otherLabel.trim() || undefined })}
             disabled={!label.trim()}
-            className="h-11 flex-1 rounded-lg bg-blue-600 font-medium text-white disabled:opacity-50"
+            className="h-11 flex-1 rounded-lg font-medium text-white disabled:opacity-50"
+            style={{ backgroundColor: primaryColor }}
           >
             Save
           </button>
@@ -590,6 +743,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const [interactionMode, setInteractionMode] = useState<'map' | 'image'>('map');
   const [isSetupPanelOpen, setIsSetupPanelOpen] = useState(false);
   const [isOverlayGestureActive, setIsOverlayGestureActive] = useState(false);
+  const [isBoundaryClosed, setIsBoundaryClosed] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
   const [mapCenter, setMapCenter] = useState<Coordinate>({ lat: defaultCenter[0], lng: defaultCenter[1] });
   const [overlayFocus, setOverlayFocus] = useState<Coordinate>({ lat: defaultCenter[0], lng: defaultCenter[1] });
@@ -607,9 +761,10 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   }, []);
   const overlay = project.layoutOverlay;
   const hasBoundary = project.boundary.length >= 3;
+  const isBoundaryFocusActive = project.isBoundaryConfirmed;
   const centerForOverlay = overlayFocus;
 
-  const fitBoundary = useMemo(() => (hasBoundary ? project.boundary : []), [hasBoundary, project.boundary]);
+  const fitBoundary = useMemo(() => (project.isBoundaryConfirmed ? project.boundary : []), [project.isBoundaryConfirmed, project.boundary]);
 
   const focusOverlayAt = (coordinate: Coordinate) => {
     setOverlayFocus(coordinate);
@@ -637,7 +792,34 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   };
 
   const addBoundaryPoint = (point: Coordinate) => {
+    if (isBoundaryClosed) return;
     updateProject({ boundary: [...project.boundary, point], isBoundaryConfirmed: false });
+    setIsBoundaryClosed(false);
+  };
+
+  const deleteBoundaryPoint = (index: number) => {
+    updateProject({ boundary: project.boundary.filter((_, pointIndex) => pointIndex !== index), isBoundaryConfirmed: false });
+    setIsBoundaryClosed(false);
+  };
+
+  const undoBoundaryPoint = () => {
+    updateProject({ boundary: project.boundary.slice(0, -1), isBoundaryConfirmed: false });
+    setIsBoundaryClosed(false);
+  };
+
+  const clearBoundary = () => {
+    updateProject({ boundary: [], isBoundaryConfirmed: false });
+    setIsBoundaryClosed(false);
+  };
+
+  const closeBoundaryLoop = () => {
+    if (!hasBoundary) {
+      alert('Add at least 3 boundary points before closing the boundary.');
+      return;
+    }
+
+    setIsBoundaryClosed(true);
+    setIsPlotting(false);
   };
 
   const confirmBoundary = () => {
@@ -645,9 +827,16 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
       alert('Add at least 3 boundary points before confirming.');
       return;
     }
+    if (!isBoundaryClosed) {
+      alert('Close the boundary loop before confirming.');
+      return;
+    }
 
     setIsPlotting(false);
-    updateProject({ isBoundaryConfirmed: true });
+    updateProject({
+      isBoundaryConfirmed: true,
+      layoutOverlay: project.layoutOverlay ? { ...project.layoutOverlay, isVisible: false } : null
+    });
   };
 
   const addLayoutToMap = () => {
@@ -726,7 +915,8 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
           <button
             type="button"
             onClick={onReplaceLayout}
-            className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-gray-900 font-medium text-white"
+            className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-lg font-medium text-white"
+            style={{ backgroundColor: primaryColor }}
           >
             <ImageUp size={18} />
             Change layout map
@@ -777,11 +967,12 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
           onMapInteraction={() => setInteractionMode('map')}
         />
 
-        {project.layoutImage && overlay && (
+        {project.layoutImage && overlay && !isBoundaryFocusActive && (
           <LayoutImageOverlay
             image={project.layoutImage}
             overlay={overlay}
             selected={selectedOverlay}
+            plotting={isPlotting}
             onSelect={() => {
               setSelectedOverlay(true);
               setInteractionMode('image');
@@ -804,14 +995,22 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
           <>
             <Polygon
               positions={project.boundary.map(toLatLngTuple)}
-              pathOptions={{ color: '#ffffff', fillColor: '#2563eb', fillOpacity: mode === 'setup' ? 0.08 : 0.03, weight: 6 }}
+              pathOptions={{
+                color: project.isBoundaryConfirmed ? '#111827' : isBoundaryClosed ? '#16a34a' : '#ffffff',
+                fillColor: project.isBoundaryConfirmed ? 'transparent' : isBoundaryClosed ? '#16a34a' : primaryColor,
+                fillOpacity: project.isBoundaryConfirmed ? 0 : mode === 'setup' ? 0.08 : 0.03,
+                weight: project.isBoundaryConfirmed ? 7 : 6
+              }}
               interactive={false}
             />
-            <Polyline positions={[...project.boundary, project.boundary[0]].map(toLatLngTuple)} pathOptions={{ color: '#2563eb', weight: 3 }} />
+            <Polyline
+              positions={(isBoundaryClosed || project.isBoundaryConfirmed ? [...project.boundary, project.boundary[0]] : project.boundary).map(toLatLngTuple)}
+              pathOptions={{ color: project.isBoundaryConfirmed ? '#111827' : isBoundaryClosed ? '#16a34a' : primaryColor, weight: project.isBoundaryConfirmed ? 7 : 3 }}
+            />
           </>
         )}
 
-        {project.boundary.map((point, index) => (
+        {!project.isBoundaryConfirmed && project.boundary.map((point, index) => (
           <Marker
             key={`${point.lat}-${point.lng}-${index}`}
             position={toLatLngTuple(point)}
@@ -821,7 +1020,18 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
               iconSize: [26, 26],
               iconAnchor: [13, 13]
             })}
-          />
+          >
+            <Popup>
+              <button
+                type="button"
+                onClick={() => deleteBoundaryPoint(index)}
+                className="rounded-md px-3 py-2 text-sm font-semibold text-white"
+                style={{ backgroundColor: primaryColor }}
+              >
+                Delete point {index + 1}
+              </button>
+            </Popup>
+          </Marker>
         ))}
 
         {project.tags.map((tag) => (
@@ -842,7 +1052,9 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
         >
           <div className="flex items-center gap-2">
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-gray-900">Boundary · {project.boundary.length} points</p>
+              <p className="truncate text-sm font-semibold text-gray-900">
+                Boundary · {project.boundary.length} points{isBoundaryClosed ? ' · closed' : ''}
+              </p>
               <p className="truncate text-[11px] font-medium text-gray-500">{interactionMode === 'image' ? 'Image selected' : 'Map selected'}</p>
             </div>
             <div className="flex shrink-0 gap-1 overflow-x-auto">
@@ -873,15 +1085,17 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
                 title={isPlotting ? 'Stop plotting' : 'Start plotting'}
                 onClick={() => {
                   setInteractionMode('map');
+                  setSelectedOverlay(false);
                   setIsPlotting(!isPlotting);
                 }}
                 active={isPlotting}
+                disabled={isBoundaryClosed}
               >
                 <Edit3 size={18} />
               </ControlButton>
               <ControlButton
                 title="Undo last boundary point"
-                onClick={() => updateProject({ boundary: project.boundary.slice(0, -1), isBoundaryConfirmed: false })}
+                onClick={undoBoundaryPoint}
                 disabled={project.boundary.length === 0}
               >
                 <RotateCcw size={17} />
@@ -948,14 +1162,25 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
                 </div>
               )}
               <div className="flex gap-2">
-                <ControlButton title="Clear boundary" onClick={() => updateProject({ boundary: [], isBoundaryConfirmed: false })} disabled={project.boundary.length === 0}>
+                <ControlButton title="Clear boundary" onClick={clearBoundary} disabled={project.boundary.length === 0}>
                   <Trash2 size={18} />
                 </ControlButton>
                 <button
                   type="button"
+                  onClick={closeBoundaryLoop}
+                  disabled={!hasBoundary || isBoundaryClosed}
+                  className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-white disabled:bg-gray-300"
+                  style={!hasBoundary || isBoundaryClosed ? undefined : { backgroundColor: '#16a34a' }}
+                >
+                  <Check size={18} />
+                  Close loop
+                </button>
+                <button
+                  type="button"
                   onClick={confirmBoundary}
-                  disabled={!hasBoundary}
-                  className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 text-sm font-medium text-white disabled:bg-blue-300"
+                  disabled={!hasBoundary || !isBoundaryClosed}
+                  className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-white disabled:bg-gray-300"
+                  style={!hasBoundary || !isBoundaryClosed ? undefined : { backgroundColor: primaryColor }}
                 >
                   <Check size={18} />
                   Confirm boundary
@@ -968,7 +1193,12 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
 
       {mode === 'field' && (
         <div data-export-hidden="true" className="absolute inset-x-3 bottom-20 z-[1000] flex gap-2">
-          <button type="button" onClick={() => setIsAddingTag(true)} className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg bg-blue-600 font-semibold text-white shadow-lg">
+          <button
+            type="button"
+            onClick={() => setIsAddingTag(true)}
+            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg font-semibold text-white shadow-lg"
+            style={{ backgroundColor: primaryColor }}
+          >
             <MapPin size={18} />
             Add tag
           </button>
@@ -997,7 +1227,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
       )}
 
       <div data-export-hidden="true" className="pointer-events-none absolute left-3 top-16 z-[900] rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-gray-700 shadow-sm">
-        <Crosshair size={14} className="mr-1 inline text-blue-600" />
+        <Crosshair size={14} className="mr-1 inline" style={{ color: primaryColor }} />
         {tileLayers[baseLayer].label}
       </div>
     </div>
