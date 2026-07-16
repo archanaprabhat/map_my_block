@@ -954,6 +954,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const initialCenter = project.boundary.length > 0
     ? project.boundary[0]
     : (project.initialLocation ? { lat: project.initialLocation.lat, lng: project.initialLocation.lng } : mapCenter);
+  const visibleBoundary = draftBoundary ?? project.boundary;
   const shouldCloseBoundaryPath = isBoundaryClosed || project.isBoundaryConfirmed;
   const boundaryLine = shouldCloseBoundaryPath && visibleBoundary.length > 0 ? [...visibleBoundary, visibleBoundary[0]] : visibleBoundary;
 
@@ -1123,6 +1124,8 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
       return;
     }
 
+    const center = mapRef.current?.getCenter() || initialCenter;
+    const centerForOverlay = { lat: center.lat, lng: center.lng };
     updateProject({ layoutOverlay: createDefaultOverlay(centerForOverlay, project.layoutImageAspectRatio) });
     setSelectedOverlay(true);
     setInteractionMode('image');

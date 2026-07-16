@@ -180,7 +180,7 @@ export default function MapUploader({
     >
       <div className="absolute inset-0 bg-black/10 z-0" />
 
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[400px] p-6 flex flex-col items-stretch relative z-10 transition-all duration-300">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[440px] min-h-[520px] p-6 flex flex-col items-stretch relative z-10 transition-all duration-300">
         <div className="mb-2 flex w-full items-start justify-between gap-3">
           <h2 className="text-2xl font-bold text-gray-800 text-center flex-1">{title}</h2>
           {onCancel && (
@@ -204,27 +204,30 @@ export default function MapUploader({
 
         {/* Step 1 */}
         {currentStep === 1 && (
-          <div className="flex flex-col w-full animate-in fade-in zoom-in-95 duration-300">
+          <div className="flex flex-col w-full flex-1 animate-in fade-in zoom-in-95 duration-300">
             <h3 className="text-lg font-semibold text-gray-800 mb-1">Layout Image</h3>
             <p className="text-gray-500 text-sm mb-4">{description}</p>
 
             {!image ? (
-              <div
-                {...getRootProps()}
-                className={`w-full border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer transition-colors ${isDragActive ? 'bg-gray-100' : 'border-gray-300 hover:bg-gray-50'
-                  }`}
-                style={isDragActive ? { borderColor: primaryColor } : undefined}
-              >
-                <input {...getInputProps()} />
-                <UploadCloud size={48} className="text-gray-400 mb-4" />
-                <p className="text-gray-600 font-medium text-center">
-                  {isDragActive ? 'Drop image here...' : 'Tap to upload or drag and drop'}
-                </p>
-                <p className="text-xs text-gray-400 mt-2 text-center">PNG, JPG up to 10MB</p>
-              </div>
+              <>
+                <div
+                  {...getRootProps()}
+                  className={`w-full h-[280px] border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer transition-colors ${isDragActive ? 'bg-gray-100' : 'border-gray-300 hover:bg-gray-50'
+                    }`}
+                  style={isDragActive ? { borderColor: primaryColor } : undefined}
+                >
+                  <input {...getInputProps()} />
+                  <UploadCloud size={48} className="text-gray-400 mb-4" />
+                  <p className="text-gray-600 font-medium text-center">
+                    {isDragActive ? 'Drop image here...' : 'Tap to upload or drag and drop'}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-2 text-center">PNG, JPG up to 10MB</p>
+                </div>
+                <div className="flex w-full space-x-3 mt-auto h-[48px]"></div>
+              </>
             ) : (
-              <div className="w-full flex flex-col items-center">
-                <div className="w-full aspect-square bg-gray-100 rounded-lg overflow-hidden mb-4 border border-gray-200">
+              <div className="w-full flex-1 flex flex-col items-center">
+                <div className="w-full h-[280px] bg-gray-100 rounded-lg overflow-hidden mb-4 border border-gray-200">
                   <Cropper
                     ref={cropperRef}
                     style={{ height: '100%', width: '100%' }}
@@ -242,7 +245,7 @@ export default function MapUploader({
                   />
                 </div>
 
-                <div className="flex w-full space-x-3">
+                <div className="flex w-full space-x-3 mt-auto">
                   <button
                     onClick={() => {
                       setImage(null);
@@ -270,19 +273,19 @@ export default function MapUploader({
 
         {/* Step 2 */}
         {currentStep === 2 && (
-          <div className="flex flex-col w-full animate-in fade-in zoom-in-95 duration-300">
+          <div className="flex flex-col w-full flex-1 animate-in fade-in zoom-in-95 duration-300">
             <h3 className="text-lg font-semibold text-gray-800 mb-1">Detect Location</h3>
             <p className="text-[#757575] text-sm mb-4">Paste your SMS to automatically detect the location.</p>
 
             <div className="w-full bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
               <textarea
-                className="w-full min-h-[100px] p-3 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-black outline-none resize-none placeholder:text-[#757575]"
+                className="w-full min-h-[150px] max-h-[220px] flex-1 p-3 text-sm text-black border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-black outline-none resize-y placeholder:text-[#757575]"
                 placeholder={`Paste the SMS you received...\n\nExample:\nHLB 0588: https://maps.google.com/?q=11.809477,75.481735`}
                 value={smsText}
                 onChange={(e) => setSmsText(e.target.value)}
               />
 
-              <div className="mt-3 min-h-[40px] flex items-center">
+              <div className="mt-3 min-h-[10px] flex items-center">
                 {locationStatus === 'loading' && (
                   <p className="text-sm text-blue-600 flex items-center">
                     <span className="animate-spin mr-2 h-4 w-4 border-2 border-blue-600 border-t-transparent rounded-full"></span>
@@ -316,36 +319,38 @@ export default function MapUploader({
                   Advanced Options
                 </button>
 
-                {isAdvancedOpen && (
-                  <div className="mt-3 flex gap-2">
-                    <input
-                      type="number"
-                      placeholder="Latitude"
-                      value={manualLat}
-                      onChange={(e) => setManualLat(e.target.value)}
-                      className="flex-1 w-full p-2 text-xs border border-gray-300 rounded-lg outline-none"
-                    />
-                    <input
-                      type="number"
-                      placeholder="Longitude"
-                      value={manualLng}
-                      onChange={(e) => setManualLng(e.target.value)}
-                      className="flex-1 w-full p-2 text-xs border border-gray-300 rounded-lg outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleManualSearch}
-                      className="p-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
-                      title="Search Coordinates"
-                    >
-                      <Search size={16} />
-                    </button>
-                  </div>
-                )}
+                <div className="mt-3 flex gap-2 h-[34px]">
+                  {isAdvancedOpen && (
+                    <>
+                      <input
+                        type="number"
+                        placeholder="Latitude"
+                        value={manualLat}
+                        onChange={(e) => setManualLat(e.target.value)}
+                        className="flex-1 w-full p-2 text-xs border border-gray-300 rounded-lg outline-none placeholder:text-[#757575]"
+                      />
+                      <input
+                        type="number"
+                        placeholder="Longitude"
+                        value={manualLng}
+                        onChange={(e) => setManualLng(e.target.value)}
+                        className="flex-1 w-full p-2 text-xs border border-gray-300 rounded-lg outline-none placeholder:text-[#757575]"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleManualSearch}
+                        className="p-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                        title="Search Coordinates"
+                      >
+                        <Search size={16} />
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
             </div>
 
-            <div className="flex w-full space-x-3 mt-6">
+            <div className="flex w-full space-x-3 mt-auto">
               <button
                 onClick={() => setCurrentStep(1)}
                 className="flex-[1] py-3 px-4 bg-gray-100 text-gray-700 font-medium rounded-xl hover:bg-gray-200 transition flex items-center justify-center"
