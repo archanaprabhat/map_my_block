@@ -6,7 +6,7 @@ import { AlertTriangle, Map, RefreshCw, User } from 'lucide-react';
 import MapUploader from '../components/MapUploader';
 import { CensusProject, clearProject, emptyProject, getProject, saveProject, DetectedLocation } from '../lib/storage';
 
-const primaryColor = '#96a6b5';
+const primaryColor = '#212121';
 const activeTabKey = 'map-my-block-active-tab';
 const projectRecoveryKey = 'map-my-block-project-recovery';
 

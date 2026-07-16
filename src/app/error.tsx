@@ -4,7 +4,7 @@ import { useEffect } from 'react';
 import { RefreshCw, RotateCcw } from 'lucide-react';
 import { restartApp } from '../lib/reliability';
 
-const primaryColor = '#96a6b5';
+const primaryColor = '#212121';
 
 export default function Error({
   error,

@@ -4,7 +4,7 @@ import React, { Component, ReactNode, useEffect, useState } from 'react';
 import { RefreshCw, RotateCcw, WifiOff } from 'lucide-react';
 import { APP_ONLINE_EVENT, restartApp } from '../lib/reliability';
 
-const primaryColor = '#96a6b5';
+const primaryColor = '#212121';
 
 declare global {
   interface Window {

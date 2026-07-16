@@ -8,7 +8,7 @@ import { UploadCloud, Check, X, Search, ChevronDown, ChevronUp, ArrowRight, Arro
 import { extractCoordinates, reverseGeocode } from '../lib/location';
 import { DetectedLocation } from '../lib/storage';
 
-const primaryColor = '#000';
+const primaryColor = '#212121';
 const draftImageKey = 'map-my-block-upload-draft';
 const maxUploadBytes = 10 * 1024 * 1024;
 
