@@ -12,16 +12,22 @@ export type DetectedLocation = {
   displayName: string;
 };
 
-export type TagType = 'house' | 'business' | 'school' | 'other';
+export type TagType = 'GoodBuilding' | 'Badbuilding' | 'roads' | 'water' | 'religious' | 'institutions';
 
-export type GeoTag = {
+export type FeatureGeometry = 
+  | { type: 'Point'; coordinates: Coordinate }
+  | { type: 'LineString'; coordinates: Coordinate[] };
+
+export type CensusFeature = {
   id: string;
-  lat: number;
-  lng: number;
-  label: string;
   type: TagType;
-  otherLabel?: string;
-  timestamp: number;
+  subType: string;
+  geometry: FeatureGeometry;
+  properties: {
+    label?: string;
+    timestamp: number;
+    [key: string]: any;
+  };
 };
 
 export type LayoutOverlay = {
@@ -41,11 +47,11 @@ export type CensusProject = {
   layoutOverlay: LayoutOverlay | null;
   boundary: Coordinate[];
   isBoundaryConfirmed: boolean;
-  tags: GeoTag[];
+  features: CensusFeature[];
   initialLocation: DetectedLocation | null;
 };
 
-const PROJECT_KEY = 'census-mapper-project-v2';
+const PROJECT_KEY = 'census-mapper-project-v3';
 
 export const emptyProject: CensusProject = {
   layoutImage: null,
@@ -53,7 +59,7 @@ export const emptyProject: CensusProject = {
   layoutOverlay: null,
   boundary: [],
   isBoundaryConfirmed: false,
-  tags: [],
+  features: [],
   initialLocation: null
 };
 
@@ -65,7 +71,7 @@ const normalizeProject = (project: Partial<CensusProject> | null): CensusProject
     ...emptyProject,
     ...project,
     layoutImageAspectRatio,
-    tags: project?.tags ?? [],
+    features: project?.features ?? [],
     boundary: project?.boundary ?? [],
     initialLocation: project?.initialLocation ?? null,
     layoutOverlay: project?.layoutOverlay

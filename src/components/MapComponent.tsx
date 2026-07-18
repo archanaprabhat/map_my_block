@@ -19,6 +19,7 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  Menu,
   Move,
   Plus,
   RotateCcw,
@@ -30,7 +31,10 @@ import {
   X
 } from 'lucide-react';
 import { toPng } from 'html-to-image';
-import { CensusProject, Coordinate, GeoTag, LayoutOverlay, TagType } from '../lib/storage';
+import { CensusProject, Coordinate, CensusFeature, LayoutOverlay, TagType } from '../lib/storage';
+import SidebarControls, { SubTypeOption } from './SidebarControls';
+import { createTagIcon, tagColors } from './TagIcons';
+import { exportGeoJSON } from '../lib/geojsonExport';
 import { APP_ONLINE_EVENT, isConnectivityError, restartApp, withTimeout } from '../lib/reliability';
 
 type AppMode = 'setup' | 'field';
@@ -66,12 +70,7 @@ const primaryColor = '#212121';
 const tagDraftKey = 'map-my-block-tag-draft';
 const searchTimeoutMs = 10000;
 const exportTimeoutMs = 18000;
-const tagColors: Record<TagType, string> = {
-  house: primaryColor,
-  business: '#f97316',
-  school: '#16a34a',
-  other: '#7c3aed'
-};
+
 
 const tileLayers = {
   street: {
@@ -89,14 +88,14 @@ const tileLayers = {
 const mapPanes = {
   boundaryMask: 'boundary-mask-pane',
   boundary: 'boundary-pane',
-  tags: 'tag-pane'
+  features: 'feature-pane'
 } as const;
 
 const mapLayerZIndexes = {
   layoutOverlay: 550,
   boundaryMask: 560,
   boundary: 700,
-  tags: 740
+  features: 740
 };
 
 delete (L.Icon.Default.prototype as { _getIconUrl?: unknown })._getIconUrl;
@@ -151,14 +150,6 @@ const createDefaultOverlay = (center: Coordinate, aspectRatio: number): LayoutOv
   isLocked: false,
   isVisible: true
 });
-
-const createTagIcon = (tag: GeoTag) =>
-  L.divIcon({
-    className: 'census-tag-icon',
-    html: `<span style="background:${tagColors[tag.type]}">${tag.label}</span>`,
-    iconSize: [34, 34],
-    iconAnchor: [17, 17]
-  });
 
 const ControlButton = ({
   title,
@@ -523,7 +514,7 @@ function MapLayerPanes() {
     const panes = [
       [mapPanes.boundaryMask, mapLayerZIndexes.boundaryMask],
       [mapPanes.boundary, mapLayerZIndexes.boundary],
-      [mapPanes.tags, mapLayerZIndexes.tags]
+      [mapPanes.features, mapLayerZIndexes.features]
     ] as const;
 
     panes.forEach(([paneName, zIndex]) => {
@@ -805,111 +796,67 @@ function BoundaryMask({ boundary }: { boundary: Coordinate[] }) {
   );
 }
 
-function TagEditor({
-  initial,
-  onSave,
-  onDelete,
-  onClose
+// Removed TagEditor
+function MapInteractionHandler({
+  interactionState,
+  onPointPlaced,
+  onPolylineClick,
+  onPolylineFinish
 }: {
-  initial?: GeoTag;
-  onSave: (data: { label: string; type: TagType; otherLabel?: string }) => void;
-  onDelete?: () => void;
-  onClose: () => void;
+  interactionState: 'idle' | 'placement_point' | 'drawing_polyline';
+  onPointPlaced: (coord: Coordinate) => void;
+  onPolylineClick: (coord: Coordinate) => void;
+  onPolylineFinish: () => void;
 }) {
-  const draftKey = `${tagDraftKey}-${initial?.id ?? 'new'}`;
-  const restoredDraft = useMemo(() => {
-    if (typeof window === 'undefined') return null;
-    const savedDraft = window.sessionStorage.getItem(draftKey);
-    if (!savedDraft) return null;
-
-    try {
-      return JSON.parse(savedDraft) as { label?: string; type?: TagType; otherLabel?: string };
-    } catch (err) {
-      console.warn('Tag draft could not be restored', err);
-      return null;
-    }
-  }, [draftKey]);
-  const [label, setLabel] = useState(restoredDraft?.label ?? initial?.label ?? '');
-  const [type, setType] = useState<TagType>(restoredDraft?.type ?? initial?.type ?? 'house');
-  const [otherLabel, setOtherLabel] = useState(restoredDraft?.otherLabel ?? initial?.otherLabel ?? '');
+  const map = useMap();
 
   useEffect(() => {
-    window.sessionStorage.setItem(draftKey, JSON.stringify({ label, type, otherLabel }));
-  }, [draftKey, label, otherLabel, type]);
+    if (interactionState === 'idle') {
+      map.doubleClickZoom.enable();
+      return;
+    }
 
-  const saveAndClearDraft = () => {
-    window.sessionStorage.removeItem(draftKey);
-    onSave({ label: label.trim(), type, otherLabel: otherLabel.trim() || undefined });
-  };
+    if (interactionState === 'drawing_polyline') {
+      map.doubleClickZoom.disable();
+    } else {
+      map.doubleClickZoom.enable();
+    }
 
-  const closeAndClearDraft = () => {
-    window.sessionStorage.removeItem(draftKey);
-    onClose();
-  };
+    const handleClick = (e: L.LeafletMouseEvent) => {
+      const coord = { lat: e.latlng.lat, lng: e.latlng.lng };
+      if (interactionState === 'placement_point') {
+        onPointPlaced(coord);
+      } else if (interactionState === 'drawing_polyline') {
+        onPolylineClick(coord);
+      }
+    };
 
-  return (
-    <div className="fixed inset-0 z-[2000] grid place-items-end bg-black/35 p-3 sm:place-items-center">
-      <div className="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl">
-        <h2 className="mb-3 text-lg font-semibold text-gray-900">{initial ? 'Edit tag' : 'Add tag'}</h2>
-        <label className="mb-3 block text-sm font-medium text-gray-700">
-          Number or name
-          <input
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-            autoFocus
-            className="mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-base text-gray-900 outline-none focus:border-blue-600"
-            placeholder="House 12, Shop A, School"
-          />
-        </label>
-        <div className="mb-3 grid grid-cols-2 gap-2">
-          {(['house', 'business', 'school', 'other'] as TagType[]).map((tagType) => (
-            <button
-              key={tagType}
-              type="button"
-              onClick={() => setType(tagType)}
-              className={`rounded-lg border px-3 py-2 text-sm font-medium capitalize ${type === tagType ? 'bg-indigo-50' : 'border-gray-200 text-gray-700'}`}
-              style={type === tagType ? { borderColor: primaryColor, color: primaryColor } : undefined}
-            >
-              {tagType}
-            </button>
-          ))}
-        </div>
-        {type === 'other' && (
-          <label className="mb-3 block text-sm font-medium text-gray-700">
-            Specify type
-            <input
-              value={otherLabel}
-              onChange={(event) => setOtherLabel(event.target.value)}
-              className="mt-1 h-11 w-full rounded-lg border border-gray-300 px-3 text-base text-gray-900 outline-none focus:border-blue-600"
-              placeholder="Temple, office, vacant plot"
-            />
-          </label>
-        )}
-        <div className="flex gap-2">
-          {onDelete && (
-            <button type="button" onClick={onDelete} className="grid h-11 w-11 place-items-center rounded-lg bg-red-50 text-red-600">
-              <Trash2 size={18} />
-            </button>
-          )}
-          <button type="button" onClick={closeAndClearDraft} className="h-11 flex-1 rounded-lg bg-gray-100 font-medium text-gray-700">
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={saveAndClearDraft}
-            disabled={!label.trim()}
-            className="h-11 flex-1 rounded-lg font-medium text-white disabled:opacity-50"
-            style={{ backgroundColor: primaryColor }}
-          >
-            Save
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+    const handleDblClick = (e: L.LeafletMouseEvent) => {
+      if (interactionState === 'drawing_polyline') {
+        L.DomEvent.stopPropagation(e);
+        onPolylineFinish();
+      }
+    };
+
+    map.on('click', handleClick);
+    map.on('dblclick', handleDblClick);
+
+    return () => {
+      map.off('click', handleClick);
+      map.off('dblclick', handleDblClick);
+    };
+  }, [map, interactionState, onPointPlaced, onPolylineClick, onPolylineFinish]);
+
+  return null;
 }
 
 export default function MapComponent({ project, mode, activeTab, onProjectChange, onResetProject, onReplaceLayout }: MapComponentProps) {
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [language, setLanguage] = useState<'en' | 'ml'>('en');
+  const [interactionState, setInteractionState] = useState<'idle' | 'placement_point' | 'drawing_polyline'>('idle');
+  const [selectedType, setSelectedType] = useState<TagType | null>(null);
+  const [selectedSubType, setSelectedSubType] = useState<SubTypeOption | null>(null);
+  const [currentDrawingCoords, setCurrentDrawingCoords] = useState<Coordinate[]>([]);
   const [baseLayer, setBaseLayer] = useState<BaseLayer>('street');
   const [isPlotting, setIsPlotting] = useState(false);
   const [selectedOverlay, setSelectedOverlay] = useState(false);
@@ -931,7 +878,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const [draftBoundary, setDraftBoundary] = useState<Coordinate[] | null>(null);
   const [draftOverlay, setDraftOverlay] = useState<LayoutOverlay | null>(null);
   const [isBoundarySegmentDragging, setIsBoundarySegmentDragging] = useState(false);
-  const [editingTag, setEditingTag] = useState<GeoTag | null>(null);
+  const [editingTag, setEditingTag] = useState<CensusFeature | null>(null);
   const [isAddingTag, setIsAddingTag] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -1000,6 +947,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
 
   const addBoundaryPoint = (point: Coordinate) => {
     if (isBoundaryClosed) return;
+    setDraftBoundary(null);
     updateProject({ boundary: [...project.boundary, point], isBoundaryConfirmed: false });
     setIsBoundaryClosed(false);
   };
@@ -1015,16 +963,19 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   };
 
   const deleteBoundaryPoint = (index: number) => {
+    setDraftBoundary(null);
     updateProject({ boundary: project.boundary.filter((_, pointIndex) => pointIndex !== index), isBoundaryConfirmed: false });
     setIsBoundaryClosed(false);
   };
 
   const undoBoundaryPoint = () => {
+    setDraftBoundary(null);
     updateProject({ boundary: project.boundary.slice(0, -1), isBoundaryConfirmed: false });
     setIsBoundaryClosed(false);
   };
 
   const clearBoundary = () => {
+    setDraftBoundary(null);
     updateProject({ boundary: [], isBoundaryConfirmed: false });
     setIsBoundaryClosed(false);
   };
@@ -1135,7 +1086,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const saveTag = (data: { label: string; type: TagType; otherLabel?: string }) => {
     if (editingTag) {
       updateProject({
-        tags: project.tags.map((tag) => (tag.id === editingTag.id ? { ...tag, ...data } : tag))
+        features: project.features.map((tag) => (tag.id === editingTag.id ? { ...tag, type: data.type, properties: { ...tag.properties, ...data } } : tag))
       });
       setEditingTag(null);
       return;
@@ -1147,20 +1098,24 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
       if (!shouldContinue) return;
     }
 
-    const nextTag: GeoTag = {
+    const nextTag: CensusFeature = {
       id: `${Date.now()}`,
-      lat: coordinate.lat,
-      lng: coordinate.lng,
-      timestamp: Date.now(),
-      ...data
+      type: data.type,
+      subType: data.type,
+      geometry: { type: 'Point', coordinates: coordinate },
+      properties: {
+        label: data.label,
+        otherLabel: data.otherLabel,
+        timestamp: Date.now()
+      }
     };
 
-    updateProject({ tags: [...project.tags, nextTag] });
+    updateProject({ features: [...project.features, nextTag] });
     setIsAddingTag(false);
   };
 
   const deleteTag = (id: string) => {
-    updateProject({ tags: project.tags.filter((tag) => tag.id !== id) });
+    updateProject({ features: project.features.filter((tag) => tag.id !== id) });
     setEditingTag(null);
   };
 
@@ -1203,7 +1158,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             </div>
             <div className="rounded-lg bg-gray-50 p-3">
               <span className="block text-gray-500">Tags added</span>
-              <strong className="text-lg text-gray-900">{project.tags.length}</strong>
+              <strong className="text-lg text-gray-900">{project.features.length}</strong>
             </div>
           </div>
           <button
@@ -1237,418 +1192,514 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   }
 
   return (
-    <div ref={exportRef} className="relative h-dvh w-screen overflow-hidden bg-white">
-      <MapContainer center={initialCenter} zoom={16} minZoom={mapMinZoom} maxZoom={mapMaxZoom} zoomControl={false} className="h-full w-full">
-        <MapBridge onReady={handleMapReady} onCenterChange={handleCenterChange} />
-        <MapLayerPanes />
-        <MapGestureMode locked={mode === 'setup' && (isOverlayGestureActive || isBoundarySegmentDragging)} />
-        {!project.initialLocation && (
-          <LocateOnMount
-            onLocation={(coord) => {
-              handleCenterChange(coord);
-              setOverlayFocus(coord);
+    <div className="flex h-dvh w-screen flex-col overflow-hidden bg-gray-50 md:flex-row">
+      {(mode === 'field' || mode === 'setup') && (
+        <SidebarControls
+          isOpen={isSidebarOpen}
+          onClose={() => setIsSidebarOpen(false)}
+          features={project.features}
+          onSelectSubType={(type, subType) => {
+            setSelectedType(type);
+            setSelectedSubType(subType);
+            setInteractionState(subType.geometry === 'Point' ? 'placement_point' : 'drawing_polyline');
+            setCurrentDrawingCoords([]);
+          }}
+          onFlyTo={(feature) => {
+            if (feature.geometry.type === 'Point') {
+              mapRef.current?.flyTo([feature.geometry.coordinates.lat, feature.geometry.coordinates.lng], 18);
+            } else if (feature.geometry.type === 'LineString' && (feature.geometry.coordinates as Coordinate[]).length > 0) {
+              const firstCoord = (feature.geometry.coordinates as Coordinate[])[0];
+              mapRef.current?.flyTo([firstCoord.lat, firstCoord.lng], 18);
+            }
+          }}
+          onDeleteFeature={deleteTag}
+          onEditFeature={setEditingTag}
+          language={language}
+          onToggleLanguage={() => setLanguage(l => l === 'en' ? 'ml' : 'en')}
+        />
+      )}
+
+      <div ref={exportRef} className="relative flex-1 h-dvh overflow-hidden bg-white">
+        {interactionState !== 'idle' && selectedSubType && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[2000] flex items-center gap-3 px-4 py-2 rounded-full bg-white/90 backdrop-blur-md shadow-lg border border-gray-200 text-sm font-semibold text-indigo-900 animate-in fade-in slide-in-from-top-4">
+            <span className="pointer-events-none">
+              {interactionState === 'placement_point'
+                ? `Tap map to place ${language === 'en' ? selectedSubType.labelEn : selectedSubType.labelMl}`
+                : `Tap to draw ${language === 'en' ? selectedSubType.labelEn : selectedSubType.labelMl}, double-tap to finish`}
+            </span>
+            <button
+              onClick={() => {
+                setInteractionState('idle');
+                setSelectedType(null);
+                setSelectedSubType(null);
+                setCurrentDrawingCoords([]);
+              }}
+              className="ml-2 rounded-full bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-700 shadow-sm"
+            >
+              Done
+            </button>
+          </div>
+        )}
+        <MapContainer center={initialCenter} zoom={16} minZoom={mapMinZoom} maxZoom={mapMaxZoom} zoomControl={false} className="h-full w-full">
+          <MapBridge onReady={handleMapReady} onCenterChange={handleCenterChange} />
+          <MapLayerPanes />
+          <MapGestureMode locked={mode === 'setup' && (isOverlayGestureActive || isBoundarySegmentDragging)} />
+          {!project.initialLocation && (
+            <LocateOnMount
+              onLocation={(coord) => {
+                handleCenterChange(coord);
+                setOverlayFocus(coord);
+              }}
+            />
+          )}
+          <FittedBoundary boundary={fitBoundary} />
+          <TileLayer
+            attribution={tileLayers[baseLayer].attribution}
+            url={tileLayers[baseLayer].url}
+            minZoom={mapMinZoom}
+            maxZoom={mapMaxZoom}
+            maxNativeZoom={19}
+          />
+          <SearchBox onLocationSelect={focusOverlayAt} />
+          <MapActions
+            baseLayer={baseLayer}
+            onBaseLayerChange={() => setBaseLayer(baseLayer === 'street' ? 'satellite' : 'street')}
+            onBoundary={goToBoundary}
+            hasBoundary={project.boundary.length > 0}
+            onLocate={locateMe}
+            onZoomIn={() => mapRef.current?.zoomIn()}
+            onZoomOut={() => mapRef.current?.zoomOut()}
+          />
+          <ClickToPlot
+            enabled={mode === 'setup' && isPlotting}
+            onAddPoint={addBoundaryPoint}
+            onMapInteraction={() => setInteractionMode('map')}
+          />
+          <MapInteractionHandler
+            interactionState={interactionState}
+            onPointPlaced={(coord) => {
+              if (!selectedType || !selectedSubType) return;
+              const newFeature: CensusFeature = {
+                id: `${Date.now()}`,
+                type: selectedType,
+                subType: selectedSubType.id,
+                geometry: { type: 'Point', coordinates: coord },
+                properties: { label: '', timestamp: Date.now() }
+              };
+              updateProject({ features: [...project.features, newFeature] });
+            }}
+            onPolylineClick={(coord) => {
+              setCurrentDrawingCoords((prev) => [...prev, coord]);
+            }}
+            onPolylineFinish={() => {
+              if (!selectedType || !selectedSubType || currentDrawingCoords.length < 2) return;
+              const newFeature: CensusFeature = {
+                id: `${Date.now()}`,
+                type: selectedType,
+                subType: selectedSubType.id,
+                geometry: { type: 'LineString', coordinates: currentDrawingCoords },
+                properties: { label: '', timestamp: Date.now() }
+              };
+              updateProject({ features: [...project.features, newFeature] });
+              setInteractionState('idle');
+              setSelectedSubType(null);
+              setCurrentDrawingCoords([]);
             }}
           />
-        )}
-        <FittedBoundary boundary={fitBoundary} />
-        <TileLayer
-          attribution={tileLayers[baseLayer].attribution}
-          url={tileLayers[baseLayer].url}
-          minZoom={mapMinZoom}
-          maxZoom={mapMaxZoom}
-          maxNativeZoom={19}
-        />
-        <SearchBox onLocationSelect={focusOverlayAt} />
-        <MapActions
-          baseLayer={baseLayer}
-          onBaseLayerChange={() => setBaseLayer(baseLayer === 'street' ? 'satellite' : 'street')}
-          onBoundary={goToBoundary}
-          hasBoundary={project.boundary.length > 0}
-          onLocate={locateMe}
-          onZoomIn={() => mapRef.current?.zoomIn()}
-          onZoomOut={() => mapRef.current?.zoomOut()}
-        />
-        <ClickToPlot
-          enabled={mode === 'setup' && isPlotting}
-          onAddPoint={addBoundaryPoint}
-          onMapInteraction={() => setInteractionMode('map')}
-        />
+          {interactionState === 'drawing_polyline' && currentDrawingCoords.length > 0 && (
+            <Polyline
+              positions={currentDrawingCoords.map((c) => [c.lat, c.lng])}
+              pathOptions={{ color: '#ef4444', weight: 4, dashArray: '5, 10' }}
+              interactive={false}
+            />
+          )}
 
-        {project.layoutImage && overlay && !isBoundaryFocusActive && (
-          <LayoutImageOverlay
-            image={project.layoutImage}
-            overlay={overlay}
-            selected={selectedOverlay}
-            plotting={isPlotting}
-            onSelect={() => {
-              setSelectedOverlay(true);
-              setInteractionMode('image');
-              setIsPlotting(false);
-            }}
-            onGestureStart={() => setIsOverlayGestureActive(true)}
-            onGestureEnd={() => setIsOverlayGestureActive(false)}
-            onPreview={(layoutOverlay) => setDraftOverlay(layoutOverlay)}
-            onCommit={() => {
-              if (draftOverlay) {
-                updateProject({ layoutOverlay: draftOverlay });
-                setDraftOverlay(null);
-              }
-            }}
-          />
-        )}
+          {project.layoutImage && overlay && !isBoundaryFocusActive && (
+            <LayoutImageOverlay
+              image={project.layoutImage}
+              overlay={overlay}
+              selected={selectedOverlay}
+              plotting={isPlotting}
+              onSelect={() => {
+                setSelectedOverlay(true);
+                setInteractionMode('image');
+                setIsPlotting(false);
+              }}
+              onGestureStart={() => setIsOverlayGestureActive(true)}
+              onGestureEnd={() => setIsOverlayGestureActive(false)}
+              onPreview={(layoutOverlay) => setDraftOverlay(layoutOverlay)}
+              onCommit={() => {
+                if (draftOverlay) {
+                  updateProject({ layoutOverlay: draftOverlay });
+                  setDraftOverlay(null);
+                }
+              }}
+            />
+          )}
 
-        {currentLocation && (
-          <Marker position={toLatLngTuple(currentLocation)} pane={mapPanes.tags} zIndexOffset={2000}>
-            <Popup>Your current location</Popup>
-          </Marker>
-        )}
+          {currentLocation && (
+            <Marker position={toLatLngTuple(currentLocation)} pane={mapPanes.features} zIndexOffset={2000}>
+              <Popup>Your current location</Popup>
+            </Marker>
+          )}
 
-        {project.isBoundaryConfirmed && <BoundaryMask boundary={visibleBoundary} />}
-        {visibleBoundary.length > 0 && (
-          <>
-            {shouldCloseBoundaryPath && (
-              <Polygon
+          {project.isBoundaryConfirmed && <BoundaryMask boundary={visibleBoundary} />}
+          {visibleBoundary.length > 0 && (
+            <>
+              {shouldCloseBoundaryPath && (
+                <Polygon
+                  pane={mapPanes.boundary}
+                  positions={visibleBoundary.map(toLatLngTuple)}
+                  pathOptions={{
+                    color: project.isBoundaryConfirmed ? '#111827' : primaryColor,
+                    fillColor: project.isBoundaryConfirmed ? 'transparent' : primaryColor,
+                    fillOpacity: project.isBoundaryConfirmed ? 0 : mode === 'setup' ? 0.08 : 0.03,
+                    weight: project.isBoundaryConfirmed ? 7 : 6
+                  }}
+                  interactive={false}
+                />
+              )}
+              <Polyline
                 pane={mapPanes.boundary}
-                positions={visibleBoundary.map(toLatLngTuple)}
+                positions={boundaryLine.map(toLatLngTuple)}
                 pathOptions={{
                   color: project.isBoundaryConfirmed ? '#111827' : primaryColor,
-                  fillColor: project.isBoundaryConfirmed ? 'transparent' : primaryColor,
-                  fillOpacity: project.isBoundaryConfirmed ? 0 : mode === 'setup' ? 0.08 : 0.03,
-                  weight: project.isBoundaryConfirmed ? 7 : 6
+                  lineCap: 'butt',
+                  lineJoin: 'miter',
+                  weight: project.isBoundaryConfirmed ? 7 : 4
                 }}
                 interactive={false}
               />
-            )}
-            <Polyline
+              {!project.isBoundaryConfirmed && shouldCloseBoundaryPath &&
+                project.boundary.map((point, index) => {
+                  const nextPoint = project.boundary[(index + 1) % project.boundary.length];
+                  if (!nextPoint) return null;
+
+                  return (
+                    <Polyline
+                      key={`segment-hit-${point.lat}-${point.lng}-${index}`}
+                      pane={mapPanes.boundary}
+                      positions={[point, nextPoint].map(toLatLngTuple)}
+                      className="boundary-segment-hit"
+                      pathOptions={{ color: '#000000', opacity: 0, weight: 28 }}
+                      eventHandlers={{
+                        mousedown: (event) => startBoundarySegmentDrag(index, event)
+                      }}
+                    />
+                  );
+                })}
+            </>
+          )}
+
+          {!project.isBoundaryConfirmed && project.boundary.map((point, index) => (
+            <Marker
+              key={`${point.lat}-${point.lng}-${index}`}
+              position={toLatLngTuple(point)}
+              draggable
               pane={mapPanes.boundary}
-              positions={boundaryLine.map(toLatLngTuple)}
-              pathOptions={{
-                color: project.isBoundaryConfirmed ? '#111827' : primaryColor,
-                lineCap: 'butt',
-                lineJoin: 'miter',
-                weight: project.isBoundaryConfirmed ? 7 : 4
-              }}
-              interactive={false}
-            />
-            {!project.isBoundaryConfirmed && shouldCloseBoundaryPath &&
-              project.boundary.map((point, index) => {
-                const nextPoint = project.boundary[(index + 1) % project.boundary.length];
-                if (!nextPoint) return null;
-
-                return (
-                  <Polyline
-                    key={`segment-hit-${point.lat}-${point.lng}-${index}`}
-                    pane={mapPanes.boundary}
-                    positions={[point, nextPoint].map(toLatLngTuple)}
-                    className="boundary-segment-hit"
-                    pathOptions={{ color: '#000000', opacity: 0, weight: 28 }}
-                    eventHandlers={{
-                      mousedown: (event) => startBoundarySegmentDrag(index, event)
-                    }}
-                  />
-                );
+              zIndexOffset={2500}
+              icon={L.divIcon({
+                className: 'boundary-point-icon',
+                html: `<span><strong>${index + 1}</strong></span>`,
+                iconSize: [26, 26],
+                iconAnchor: [13, 13]
               })}
-          </>
-        )}
+              eventHandlers={{
+                click: (event) => {
+                  event.originalEvent?.stopPropagation();
+                },
+                mousedown: (event) => {
+                  event.originalEvent?.stopPropagation();
+                  setInteractionMode('map');
+                },
+                dragstart: () => {
+                  setInteractionMode('map');
+                },
+                drag: (event) => {
+                  const nextPoint = event.target.getLatLng();
+                  previewBoundaryPoint(index, { lat: nextPoint.lat, lng: nextPoint.lng });
+                },
+                dragend: (event) => {
+                  const nextPoint = event.target.getLatLng();
+                  moveBoundaryPoint(index, { lat: nextPoint.lat, lng: nextPoint.lng });
+                },
+                contextmenu: (event) => {
+                  event.originalEvent?.preventDefault();
+                  event.originalEvent?.stopPropagation();
+                  event.target.openPopup();
+                }
+              }}
+            >
+              <Popup>
+                <button
+                  type="button"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onMouseDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    deleteBoundaryPoint(index);
+                  }}
+                  className="rounded-md px-3 py-2 text-sm font-semibold text-white"
+                  style={{ backgroundColor: primaryColor }}
+                >
+                  Delete point {index + 1}
+                </button>
+              </Popup>
+            </Marker>
+          ))}
 
-        {!project.isBoundaryConfirmed && project.boundary.map((point, index) => (
-          <Marker
-            key={`${point.lat}-${point.lng}-${index}`}
-            position={toLatLngTuple(point)}
-            draggable
-            pane={mapPanes.boundary}
-            zIndexOffset={2500}
-            icon={L.divIcon({
-              className: 'boundary-point-icon',
-              html: `<span><strong>${index + 1}</strong></span>`,
-              iconSize: [26, 26],
-              iconAnchor: [13, 13]
-            })}
-            eventHandlers={{
-              click: (event) => {
-                event.originalEvent?.stopPropagation();
-              },
-              mousedown: (event) => {
-                event.originalEvent?.stopPropagation();
-                setInteractionMode('map');
-              },
-              dragstart: () => {
-                setInteractionMode('map');
-              },
-              drag: (event) => {
-                const nextPoint = event.target.getLatLng();
-                previewBoundaryPoint(index, { lat: nextPoint.lat, lng: nextPoint.lng });
-              },
-              dragend: (event) => {
-                const nextPoint = event.target.getLatLng();
-                moveBoundaryPoint(index, { lat: nextPoint.lat, lng: nextPoint.lng });
-              },
-              contextmenu: (event) => {
-                event.originalEvent?.preventDefault();
-                event.originalEvent?.stopPropagation();
-                event.target.openPopup();
-              }
-            }}
+          {project.features.map((tag) => tag.geometry.type === 'Point' ? (
+            <Marker
+              key={tag.id}
+              position={[tag.geometry.coordinates.lat, tag.geometry.coordinates.lng]}
+              draggable={true}
+              pane={mapPanes.features}
+              zIndexOffset={3000}
+              icon={createTagIcon(tag as any)}
+              eventHandlers={{
+                click: () => setEditingTag(tag),
+                dragend: (e) => {
+                  const newLatLng = e.target.getLatLng();
+                  updateProject({
+                    features: project.features.map(f =>
+                      f.id === tag.id ? { ...f, geometry: { type: 'Point', coordinates: { lat: newLatLng.lat, lng: newLatLng.lng } } } : f
+                    )
+                  });
+                }
+              }}
+            >
+              <Popup>
+                <strong>{tag.properties.label}</strong>
+                <br />
+                <span>{tag.subType}</span>
+              </Popup>
+            </Marker>
+          ) : null)}
+        </MapContainer>
+
+        {mode === 'setup' && (
+          <div
+            data-export-hidden="true"
+            className="absolute inset-x-2 bottom-3 z-[1000] mx-auto max-w-xl rounded-xl border border-gray-200 bg-white/95 p-2 shadow-xl backdrop-blur"
           >
-            <Popup>
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold text-gray-900">
+                  Boundary · {project.boundary.length} points{isBoundaryClosed ? ' · closed' : ''}
+                </p>
+                <p className="truncate text-[11px] font-medium text-gray-500">
+                  {interactionMode === 'image' ? 'Image selected' : 'Map selected'}
+                </p>
+              </div>
+              <div className="flex shrink-0 gap-1 overflow-x-auto">
+                <ControlButton
+                  title={overlay?.isVisible ? 'Hide layout map' : 'Show layout map'}
+                  onClick={toggleLayoutMap}
+                  active={Boolean(overlay?.isVisible)}
+                >
+                  {overlay?.isVisible ? <EyeOff size={18} /> : <Eye size={18} />}
+                </ControlButton>
+                <ControlButton title="Change uploaded layout image" onClick={onReplaceLayout}>
+                  <ImageUp size={18} />
+                </ControlButton>
+                {overlay && (
+                  <ControlButton
+                    title={overlay.isLocked ? 'Unlock layout map' : 'Lock layout map'}
+                    onClick={() => updateProject({ layoutOverlay: { ...overlay, isLocked: !overlay.isLocked } })}
+                    active={overlay.isLocked}
+                  >
+                    {overlay.isLocked ? <Lock size={17} /> : <Unlock size={17} />}
+                  </ControlButton>
+                )}
+                <ControlButton
+                  title={isPlotting ? 'Stop plotting' : 'Start plotting'}
+                  onClick={() => {
+                    setInteractionMode('map');
+                    setSelectedOverlay(false);
+                    setIsPlotting(!isPlotting);
+                  }}
+                  active={isPlotting}
+                  disabled={isBoundaryClosed}
+                >
+                  <Edit3 size={18} />
+                </ControlButton>
+                <ControlButton
+                  title="Undo last boundary point"
+                  onClick={undoBoundaryPoint}
+                  disabled={project.boundary.length === 0}
+                >
+                  <RotateCcw size={17} />
+                </ControlButton>
+                <ControlButton
+                  title={isSetupPanelOpen ? 'Minimize toolbar' : 'Expand toolbar'}
+                  onClick={() => setIsSetupPanelOpen(!isSetupPanelOpen)}
+                  active={isSetupPanelOpen}
+                >
+                  {isSetupPanelOpen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                </ControlButton>
+              </div>
+            </div>
+
+            <div className="mt-2 flex gap-2">
+              <ControlButton title="Delete boundary" onClick={clearBoundary} disabled={project.boundary.length === 0}>
+                <Trash2 size={18} />
+              </ControlButton>
               <button
                 type="button"
-                onPointerDown={(event) => event.stopPropagation()}
-                onMouseDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  deleteBoundaryPoint(index);
-                }}
-                className="rounded-md px-3 py-2 text-sm font-semibold text-white"
-                style={{ backgroundColor: primaryColor }}
+                onClick={closeBoundaryLoop}
+                disabled={!hasBoundary || isBoundaryClosed}
+                className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-white disabled:bg-gray-300"
+                style={!hasBoundary || isBoundaryClosed ? undefined : { backgroundColor: '#16a34a' }}
               >
-                Delete point {index + 1}
+                <Check size={18} />
+                Close loop
               </button>
-            </Popup>
-          </Marker>
-        ))}
-
-        {project.tags.map((tag) => (
-          <Marker
-            key={tag.id}
-            position={[tag.lat, tag.lng]}
-            pane={mapPanes.tags}
-            zIndexOffset={3000}
-            icon={createTagIcon(tag)}
-            eventHandlers={{ click: () => setEditingTag(tag) }}
-          >
-            <Popup>
-              <strong>{tag.label}</strong>
-              <br />
-              <span>{tag.type === 'other' ? tag.otherLabel ?? 'Other' : tag.type}</span>
-            </Popup>
-          </Marker>
-        ))}
-      </MapContainer>
-
-      {mode === 'setup' && (
-        <div
-          data-export-hidden="true"
-          className="absolute inset-x-2 bottom-3 z-[1000] mx-auto max-w-xl rounded-xl border border-gray-200 bg-white/95 p-2 shadow-xl backdrop-blur"
-        >
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-gray-900">
-                Boundary · {project.boundary.length} points{isBoundaryClosed ? ' · closed' : ''}
-              </p>
-              <p className="truncate text-[11px] font-medium text-gray-500">
-                {interactionMode === 'image' ? 'Image selected' : 'Map selected'}
-              </p>
+              <button
+                type="button"
+                onClick={confirmBoundary}
+                disabled={!hasBoundary || !isBoundaryClosed}
+                className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-white disabled:bg-gray-300"
+                style={!hasBoundary || !isBoundaryClosed ? undefined : { backgroundColor: primaryColor }}
+              >
+                <Check size={18} />
+                Confirm boundary
+              </button>
             </div>
-            <div className="flex shrink-0 gap-1 overflow-x-auto">
-              <ControlButton
-                title={overlay?.isVisible ? 'Hide layout map' : 'Show layout map'}
-                onClick={toggleLayoutMap}
-                active={Boolean(overlay?.isVisible)}
-              >
-                {overlay?.isVisible ? <EyeOff size={18} /> : <Eye size={18} />}
-              </ControlButton>
-              <ControlButton title="Change uploaded layout image" onClick={onReplaceLayout}>
-                <ImageUp size={18} />
-              </ControlButton>
-              {overlay && (
-                <ControlButton
-                  title={overlay.isLocked ? 'Unlock layout map' : 'Lock layout map'}
-                  onClick={() => updateProject({ layoutOverlay: { ...overlay, isLocked: !overlay.isLocked } })}
-                  active={overlay.isLocked}
-                >
-                  {overlay.isLocked ? <Lock size={17} /> : <Unlock size={17} />}
-                </ControlButton>
-              )}
-              <ControlButton
-                title={isPlotting ? 'Stop plotting' : 'Start plotting'}
-                onClick={() => {
-                  setInteractionMode('map');
-                  setSelectedOverlay(false);
-                  setIsPlotting(!isPlotting);
-                }}
-                active={isPlotting}
-                disabled={isBoundaryClosed}
-              >
-                <Edit3 size={18} />
-              </ControlButton>
-              <ControlButton
-                title="Undo last boundary point"
-                onClick={undoBoundaryPoint}
-                disabled={project.boundary.length === 0}
-              >
-                <RotateCcw size={17} />
-              </ControlButton>
-              <ControlButton
-                title={isSetupPanelOpen ? 'Minimize toolbar' : 'Expand toolbar'}
-                onClick={() => setIsSetupPanelOpen(!isSetupPanelOpen)}
-                active={isSetupPanelOpen}
-              >
-                {isSetupPanelOpen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-              </ControlButton>
-            </div>
-          </div>
 
-          <div className="mt-2 flex gap-2">
-            <ControlButton title="Delete boundary" onClick={clearBoundary} disabled={project.boundary.length === 0}>
-              <Trash2 size={18} />
-            </ControlButton>
-            <button
-              type="button"
-              onClick={closeBoundaryLoop}
-              disabled={!hasBoundary || isBoundaryClosed}
-              className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-white disabled:bg-gray-300"
-              style={!hasBoundary || isBoundaryClosed ? undefined : { backgroundColor: '#16a34a' }}
-            >
-              <Check size={18} />
-              Close loop
-            </button>
-            <button
-              type="button"
-              onClick={confirmBoundary}
-              disabled={!hasBoundary || !isBoundaryClosed}
-              className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-medium text-white disabled:bg-gray-300"
-              style={!hasBoundary || !isBoundaryClosed ? undefined : { backgroundColor: primaryColor }}
-            >
-              <Check size={18} />
-              Confirm boundary
-            </button>
-          </div>
-
-          {isSetupPanelOpen && (
-            <div className="mt-2 grid gap-2 border-t border-gray-100 pt-2">
-              {overlay && (
-                <div className="grid gap-2">
-                  <div className="grid gap-2 sm:grid-cols-3 sm:items-end">
-                    <label className="mb-2 block text-xs font-medium text-blue-950">
-                      Opacity
-                      <input
-                        type="range"
-                        min="0.15"
-                        max="1"
-                        step="0.05"
-                        value={overlay.opacity}
-                        onChange={(event) => updateProject({ layoutOverlay: { ...overlay, opacity: Number(event.target.value) } })}
-                        className="w-full"
-                      />
-                    </label>
-                    <label className="mb-2 block text-xs font-medium text-blue-950">
-                      Size
-                      <input
-                        type="range"
-                        min="120"
-                        max="1400"
-                        step="20"
-                        value={overlay.widthMeters}
-                        onChange={(event) => {
-                          const widthMeters = Number(event.target.value);
-                          updateProject({
-                            layoutOverlay: {
-                              ...overlay,
-                              widthMeters,
-                              heightMeters: widthMeters / Math.max(0.1, overlay.aspectRatio)
-                            }
-                          });
-                        }}
-                        className="w-full"
-                      />
-                    </label>
-                    <label className="block text-xs font-medium text-blue-950">
-                      Rotate
-                      <input
-                        type="range"
-                        min="-180"
-                        max="180"
-                        step="1"
-                        value={overlay.rotation}
-                        onChange={(event) => updateProject({ layoutOverlay: { ...overlay, rotation: Number(event.target.value) } })}
-                        className="w-full"
-                      />
-                    </label>
+            {isSetupPanelOpen && (
+              <div className="mt-2 grid gap-2 border-t border-gray-100 pt-2">
+                {overlay && (
+                  <div className="grid gap-2">
+                    <div className="grid gap-2 sm:grid-cols-3 sm:items-end">
+                      <label className="mb-2 block text-xs font-medium text-blue-950">
+                        Opacity
+                        <input
+                          type="range"
+                          min="0.15"
+                          max="1"
+                          step="0.05"
+                          value={overlay.opacity}
+                          onChange={(event) => updateProject({ layoutOverlay: { ...overlay, opacity: Number(event.target.value) } })}
+                          className="w-full"
+                        />
+                      </label>
+                      <label className="mb-2 block text-xs font-medium text-blue-950">
+                        Size
+                        <input
+                          type="range"
+                          min="120"
+                          max="1400"
+                          step="20"
+                          value={overlay.widthMeters}
+                          onChange={(event) => {
+                            const widthMeters = Number(event.target.value);
+                            updateProject({
+                              layoutOverlay: {
+                                ...overlay,
+                                widthMeters,
+                                heightMeters: widthMeters / Math.max(0.1, overlay.aspectRatio)
+                              }
+                            });
+                          }}
+                          className="w-full"
+                        />
+                      </label>
+                      <label className="block text-xs font-medium text-blue-950">
+                        Rotate
+                        <input
+                          type="range"
+                          min="-180"
+                          max="180"
+                          step="1"
+                          value={overlay.rotation}
+                          onChange={(event) => updateProject({ layoutOverlay: { ...overlay, rotation: Number(event.target.value) } })}
+                          className="w-full"
+                        />
+                      </label>
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
-      {mode === 'field' && (
-        <div data-export-hidden="true" className="absolute inset-x-3 bottom-20 z-[1000] flex gap-2">
-          <button
-            type="button"
-            onClick={() => setIsAddingTag(true)}
-            className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg font-semibold text-white shadow-lg"
-            style={{ backgroundColor: primaryColor }}
-          >
-            <MapPin size={18} />
-            Add tag
-          </button>
-          <button
-            type="button"
-            onClick={exportMap}
-            disabled={isExporting}
-            className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
-            title="Export map"
-          >
-            {isExporting ? <RefreshCw size={19} className="animate-spin" /> : <Download size={19} />}
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setIsBoundaryClosed(project.boundary.length >= 3);
-              updateProject({ isBoundaryConfirmed: false });
-            }}
-            className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg"
-            title="Edit boundary"
-          >
-            <Move size={19} />
-          </button>
-        </div>
-      )}
-
-      {isAddingTag && <TagEditor onClose={() => setIsAddingTag(false)} onSave={saveTag} />}
-      {editingTag && (
-        <TagEditor
-          initial={editingTag}
-          onClose={() => setEditingTag(null)}
-          onSave={saveTag}
-          onDelete={() => {
-            window.sessionStorage.removeItem(`${tagDraftKey}-${editingTag.id}`);
-            deleteTag(editingTag.id);
-          }}
-        />
-      )}
-
-      <div data-export-hidden="true" className="pointer-events-none absolute left-3 top-16 z-[900] rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-gray-700 shadow-sm">
-        <Crosshair size={14} className="mr-1 inline" style={{ color: primaryColor }} />
-        {tileLayers[baseLayer].label}
-      </div>
-      {(exportError || locationError) && (
-        <div data-export-hidden="true" className="absolute inset-x-3 top-28 z-[1100] rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 shadow-lg">
-          <p className="font-semibold">{exportError ?? locationError}</p>
-          {exportError && (
+        {mode === 'field' && (
+          <div data-export-hidden="true" className="absolute inset-x-3 bottom-20 z-[1000] flex gap-2">
+            <button
+              type="button"
+              onClick={() => setIsSidebarOpen(true)}
+              className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg font-semibold text-white shadow-lg"
+              style={{ backgroundColor: primaryColor }}
+            >
+              <MapPin size={18} />
+              Add tag
+            </button>
             <button
               type="button"
               onClick={exportMap}
-              className="mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-md bg-amber-900 font-semibold text-white"
+              disabled={isExporting}
+              className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+              title="Export map"
             >
-              <RefreshCw size={14} />
-              Retry Export
+              {isExporting ? <RefreshCw size={19} className="animate-spin" /> : <Download size={19} />}
             </button>
-          )}
-          {locationError && (
             <button
               type="button"
-              onClick={locateMe}
-              className="mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-md bg-amber-900 font-semibold text-white"
+              onClick={() => {
+                setIsBoundaryClosed(project.boundary.length >= 3);
+                updateProject({ isBoundaryConfirmed: false });
+              }}
+              className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg"
+              title="Edit boundary"
             >
-              <RefreshCw size={14} />
-              Retry Location
+              <Move size={19} />
             </button>
-          )}
+          </div>
+        )}
+
+        {/* Old TagEditor references removed */}
+
+        <div data-export-hidden="true" className="pointer-events-none absolute left-3 top-16 z-[900] rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-gray-700 shadow-sm transition-all">
+          <Crosshair size={14} className="mr-1 inline" style={{ color: primaryColor }} />
+          {tileLayers[baseLayer].label}
         </div>
-      )}
+
+        {!isSidebarOpen && (mode === 'field' || mode === 'setup') && (
+          <button
+            onClick={() => setIsSidebarOpen(true)}
+            className="absolute left-3 top-28 z-[900] grid h-10 w-10 place-items-center rounded-lg bg-white/90 text-gray-700 shadow-sm backdrop-blur transition-all hover:bg-white hover:text-gray-900"
+            title="Open Map Tools"
+          >
+            <Menu size={20} />
+          </button>
+        )}
+        {(exportError || locationError) && (
+          <div data-export-hidden="true" className="absolute inset-x-3 top-28 z-[1100] rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 shadow-lg">
+            <p className="font-semibold">{exportError ?? locationError}</p>
+            {exportError && (
+              <button
+                type="button"
+                onClick={exportMap}
+                className="mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-md bg-amber-900 font-semibold text-white"
+              >
+                <RefreshCw size={14} />
+                Retry Export
+              </button>
+            )}
+            {locationError && (
+              <button
+                type="button"
+                onClick={locateMe}
+                className="mt-2 flex h-8 w-full items-center justify-center gap-1 rounded-md bg-amber-900 font-semibold text-white"
+              >
+                <RefreshCw size={14} />
+                Retry Location
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
