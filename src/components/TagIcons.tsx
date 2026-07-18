@@ -593,11 +593,276 @@ export const getSvgString = (type: TagType, subType: string) => {
 </svg>`;
   }
   if (type === 'religious' && subType === 'church') {
-    return ``;
+    return `<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="-25.6 -25.6 307.2 307.2"
+     fill="none">
+
+    <!-- Church body -->
+    <rect
+        x="64"
+        y="104"
+        width="128"
+        height="112"
+        rx="2"
+        stroke="#000"
+        stroke-width="8"/>
+
+    <!-- Roof -->
+    <path
+        d="M64 104
+           L128 48
+           L192 104"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+    <!-- Horizontal band inside roof -->
+    <path
+        d="M90 76
+           H166"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"/>
+
+    <!-- Roof base -->
+    <line
+        x1="64"
+        y1="104"
+        x2="192"
+        y2="104"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"/>
+
+    <!-- Door -->
+    <path
+        d="M112 216
+           V156
+           A16 16 0 0 1 144 156
+           V216"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+    <!-- Cross -->
+    <line
+        x1="128"
+        y1="12"
+        x2="128"
+        y2="48"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"/>
+
+    <line
+        x1="114"
+        y1="24"
+        x2="142"
+        y2="24"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"/>
+
+</svg>`;
   }
-  if (type === 'religious' && subType === 'church') {
-    return ``;
+  if (type === 'religious' && subType === 'gurudwara') {
+    return `<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="-25.6 -25.6 307.2 307.2"
+     fill="none">
+
+    <!-- Building -->
+    <rect
+        x="64"
+        y="104"
+        width="128"
+        height="112"
+        rx="2"
+        stroke="#000"
+        stroke-width="8"/>
+
+    <!-- Dome -->
+    <path
+        d="M64 104
+           Q128 52 192 104"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+    <!-- Roof line -->
+    <line
+        x1="64"
+        y1="104"
+        x2="192"
+        y2="104"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"/>
+
+    <!-- Nishan Sahib pole -->
+    <line
+        x1="128"
+        y1="52"
+        x2="128"
+        y2="24"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"/>
+
+    <!-- Khanda (simplified to match sketch) -->
+    <circle
+        cx="128"
+        cy="12"
+        r="14"
+        stroke="#000"
+        stroke-width="8"/>
+
+    <line
+        x1="128"
+        y1="6"
+        x2="128"
+        y2="18"
+        stroke="#000"
+        stroke-width="6"
+        stroke-linecap="round"/>
+
+    <!-- Door -->
+    <path
+        d="M114 216
+           V152
+           H142
+           V216"
+        stroke="#000"
+        stroke-width="8"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+
+</svg>`;
   }
+  if (type === 'institutions' && subType === 'school') {
+    return `<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="-25.6 -25.6 307.2 307.2"
+     fill="none">
+
+    <!-- School Building -->
+    <rect
+        x="56"
+        y="56"
+        width="144"
+        height="144"
+        rx="2"
+        stroke="#000"
+        stroke-width="8"/>
+
+    <!-- S in bottom-left corner -->
+    <text
+        x="72"
+        y="184"
+        font-size="64"
+        font-family="Arial, Helvetica, sans-serif"
+        font-weight="700"
+        fill="#000"
+        text-anchor="start"
+        dominant-baseline="alphabetic">
+        S
+    </text>
+
+</svg>`;
+  }
+  if (type === 'institutions' && subType === 'dispensary') {
+    return `
+    <svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="-25.6 -25.6 307.2 307.2"
+     fill="none">
+
+    <!-- Building -->
+    <rect
+        x="56"
+        y="56"
+        width="144"
+        height="144"
+        rx="2"
+        stroke="#000"
+        stroke-width="8"/>
+
+    <!-- D in bottom-left corner -->
+    <text
+        x="72"
+        y="184"
+        font-size="64"
+        font-family="Arial, Helvetica, sans-serif"
+        font-weight="700"
+        fill="#000"
+        text-anchor="start"
+        dominant-baseline="alphabetic">
+        D
+    </text>
+
+</svg>`;
+  }
+  if (type === 'institutions' && subType === 'panchayat') {
+    return `<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="-25.6 -25.6 307.2 307.2"
+     fill="none">
+
+    <!-- Building -->
+    <rect
+        x="56"
+        y="56"
+        width="144"
+        height="144"
+        rx="2"
+        stroke="#000"
+        stroke-width="8"/>
+
+    <!-- P in bottom-left corner -->
+    <text
+        x="72"
+        y="184"
+        font-size="64"
+        font-family="Arial, Helvetica, sans-serif"
+        font-weight="700"
+        fill="#000"
+        text-anchor="start"
+        dominant-baseline="alphabetic">
+        P
+    </text>
+
+</svg>`;
+  }
+  if (type === 'institutions' && subType === 'postoffice') {
+    return `<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="-25.6 -25.6 307.2 307.2"
+     fill="none">
+
+    <!-- Building -->
+    <rect
+        x="56"
+        y="56"
+        width="144"
+        height="144"
+        rx="2"
+        stroke="#000"
+        stroke-width="8"/>
+
+    <!-- PO -->
+    <text
+        x="128"
+        y="184"
+        font-size="64"
+        font-family="Arial, Helvetica, sans-serif"
+        font-weight="700"
+        fill="#000"
+        text-anchor="middle"
+        dominant-baseline="alphabetic">
+        PO
+    </text>
+
+</svg>`;
+  }
+
 
   // Return null if no custom SVG is defined
   return null;
@@ -636,4 +901,36 @@ export const SidebarIcon = ({ type, subType }: { type: TagType; subType: string 
     );
   }
   return <MapPin size={16} className="mr-2 opacity-50 flex-shrink-0" />;
+};
+
+export const getLinePattern = (type: TagType, subType: string): L.Pattern[] => {
+  const svgString = getSvgString(type, subType);
+  if (!svgString) return [];
+
+  const iconSize = 25;
+  const rotatedHtml = `
+    <div style="width: 100%; height: 100%; transform: rotate(90deg); display: flex; align-items: center; justify-content: center;">
+      ${svgString}
+    </div>
+  `;
+
+  const icon = L.divIcon({
+    html: rotatedHtml,
+    className: 'line-decorator-icon',
+    iconSize: [iconSize, iconSize],
+    iconAnchor: [iconSize / 2, iconSize / 2]
+  });
+
+  return [
+    {
+      offset: 0,
+      repeat: `${iconSize}px`,
+      symbol: L.Symbol.marker({
+        rotate: true,
+        markerOptions: {
+          icon: icon
+        }
+      })
+    }
+  ];
 };

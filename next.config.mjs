@@ -18,6 +18,20 @@ const runtimeCaching = [
       },
     },
   },
+  {
+    urlPattern: /\/opencv\/.*/i,
+    handler: 'CacheFirst',
+    options: {
+      cacheName: 'opencv-assets',
+      expiration: {
+        maxEntries: 8,
+        maxAgeSeconds: ONE_MONTH_IN_SECONDS,
+      },
+      cacheableResponse: {
+        statuses: [0, 200],
+      },
+    },
+  },
   ...defaultRuntimeCaching.map((cacheConfig) => {
     if (cacheConfig.options?.cacheName !== 'cross-origin') {
       return cacheConfig;
@@ -57,6 +71,15 @@ const nextConfig = {
   reactStrictMode: true,
   // Moved out of experimental to the root level!
   allowedDevOrigins: ['192.168.1.7'],
+  webpack: (config) => {
+    // Allow Worker(new URL(..., import.meta.url)) for sketch OpenCV worker
+    config.output = config.output || {};
+    config.output.environment = {
+      ...(config.output.environment || {}),
+      asyncFunction: true,
+    };
+    return config;
+  },
 };
 
 export default withPWA(nextConfig);

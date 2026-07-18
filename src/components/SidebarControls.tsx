@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CensusFeature, TagType } from '../lib/storage';
-import { ChevronDown, ChevronUp, MapPin, X, Trash2, Edit2 } from 'lucide-react';
+import { ChevronDown, ChevronUp, X, Trash2, Edit2 } from 'lucide-react';
+import { SidebarIcon } from './TagIcons';
 
 export type SubTypeOption = { id: string; labelEn: string; labelMl: string; geometry: 'Point' | 'LineString' };
 
@@ -73,6 +74,7 @@ type SidebarProps = {
   onFlyTo: (feature: CensusFeature) => void;
   onDeleteFeature: (id: string) => void;
   onEditFeature: (feature: CensusFeature) => void;
+  onUpdateFeature: (id: string, label: string) => void;
   language: 'en' | 'ml';
   onToggleLanguage: () => void;
 };
@@ -85,10 +87,13 @@ export default function SidebarControls({
   onFlyTo,
   onDeleteFeature,
   onEditFeature,
+  onUpdateFeature,
   language,
   onToggleLanguage
 }: SidebarProps) {
   const [openCategory, setOpenCategory] = useState<TagType | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
 
   const getLabel = (en: string, ml: string) => (language === 'ml' ? ml : en);
 
@@ -150,11 +155,10 @@ export default function SidebarControls({
                             key={sub.id}
                             onClick={() => {
                               onSelectSubType(type, sub);
-                              onClose();
                             }}
                             className="text-left px-3 py-2.5 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 rounded-lg transition-colors flex items-center"
                           >
-                            <MapPin size={16} className="mr-2 opacity-50" />
+                            <SidebarIcon type={type} subType={sub.id} />
                             {getLabel(sub.labelEn, sub.labelMl)}
                           </button>
                         ))}
@@ -181,21 +185,60 @@ export default function SidebarControls({
               <div className="space-y-2">
                 {features.map((f) => (
                   <div key={f.id} className="group flex items-center justify-between p-3 bg-white border border-gray-200 rounded-xl hover:border-indigo-300 hover:shadow-sm transition-all">
-                    <div
-                      className="flex-1 cursor-pointer"
-                      onClick={() => onFlyTo(f)}
-                    >
-                      <p className="text-sm font-semibold text-gray-900 line-clamp-1">{f.properties.label || 'Unnamed Feature'}</p>
-                      <p className="text-xs text-gray-500 capitalize mt-0.5">{f.subType.replace('_', ' ')}</p>
-                    </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => onEditFeature(f)} className="p-1.5 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors">
-                        <Edit2 size={14} />
-                      </button>
-                      <button onClick={() => onDeleteFeature(f.id)} className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
+                    {editingId === f.id ? (
+                      <div className="flex-1 flex items-center gap-2">
+                        <input
+                          autoFocus
+                          type="text"
+                          value={editValue}
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              onUpdateFeature(f.id, editValue);
+                              setEditingId(null);
+                            } else if (e.key === 'Escape') {
+                              setEditingId(null);
+                            }
+                          }}
+                          className="flex-1 px-2 py-1 text-sm border border-blue-300 rounded focus:outline-none focus:ring-1 focus:ring-indigo-500 text-black"
+                        />
+                        <button
+                          onClick={() => {
+                            onUpdateFeature(f.id, editValue);
+                            setEditingId(null);
+                          }}
+                          className="text-xs bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700 font-medium"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <div
+                          className="flex-1 cursor-pointer"
+                          onClick={() => onFlyTo(f)}
+                        >
+                          <p className="text-sm font-semibold text-gray-900 line-clamp-1">{f.properties.label || 'Unnamed Feature'}</p>
+                          <p className="text-xs text-gray-500 capitalize mt-0.5">{f.subType.replace('_', ' ')}</p>
+                        </div>
+                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => {
+                              setEditingId(f.id);
+                              setEditValue(f.properties.label || '');
+                              // Also trigger the parent callback if needed for map focus
+                              onEditFeature(f);
+                            }}
+                            className="p-1.5 text-black hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                          >
+                            <Edit2 size={14} />
+                          </button>
+                          <button onClick={() => onDeleteFeature(f.id)} className="p-1.5 text-black hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 ))}
               </div>

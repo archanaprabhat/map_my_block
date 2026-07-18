@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { MapContainer, Marker, Polygon, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -21,6 +22,7 @@ import {
   Minus,
   Menu,
   Move,
+  Pencil,
   Plus,
   RotateCcw,
   RotateCw,
@@ -30,12 +32,16 @@ import {
   Unlock,
   X
 } from 'lucide-react';
-import { toPng } from 'html-to-image';
+import { useRouter } from 'next/navigation';
 import { CensusProject, Coordinate, CensusFeature, LayoutOverlay, TagType } from '../lib/storage';
 import SidebarControls, { SubTypeOption } from './SidebarControls';
-import { createTagIcon, tagColors } from './TagIcons';
+import { createTagIcon, tagColors, getLinePattern } from './TagIcons';
+import PolylineDecorator from './PolylineDecorator';
 import { exportGeoJSON } from '../lib/geojsonExport';
 import { APP_ONLINE_EVENT, isConnectivityError, restartApp, withTimeout } from '../lib/reliability';
+import { captureMapImage } from '../lib/captureMapImage';
+import { setSketchSource, clearSketchResult } from '../lib/sketch/sketchTransfer';
+import { buildSketchOverlay, fitMapToBoundary, waitForMapIdle } from '../lib/sketch/prepareSketchCapture';
 
 type AppMode = 'setup' | 'field';
 type ProfileTab = 'map' | 'profile';
@@ -196,7 +202,7 @@ function MapActions({
   onZoomOut: () => void;
 }) {
   return (
-    <div className="absolute right-3 top-3 z-[1000] flex flex-col gap-2">
+    <div data-export-hidden="true" className="absolute right-3 top-3 z-[1000] flex flex-col gap-2">
       <ControlButton title="Zoom in" onClick={onZoomIn}>
         <Plus size={20} />
       </ControlButton>
@@ -337,7 +343,7 @@ function SearchBox({ onLocationSelect }: { onLocationSelect: (coordinate: Coordi
   };
 
   return (
-    <div className="absolute left-3 right-[4.25rem] top-3 z-[1000]">
+    <div data-export-hidden="true" className="absolute left-3 right-[4.25rem] top-3 z-[1000]">
       <form className="relative" onSubmit={submitSearch}>
         <Search size={18} className="pointer-events-none absolute left-3 top-3.5 text-gray-400" />
         <input
@@ -851,6 +857,7 @@ function MapInteractionHandler({
 }
 
 export default function MapComponent({ project, mode, activeTab, onProjectChange, onResetProject, onReplaceLayout }: MapComponentProps) {
+  const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [language, setLanguage] = useState<'en' | 'ml'>('en');
   const [interactionState, setInteractionState] = useState<'idle' | 'placement_point' | 'drawing_polyline'>('idle');
@@ -881,6 +888,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const [editingTag, setEditingTag] = useState<CensusFeature | null>(null);
   const [isAddingTag, setIsAddingTag] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [isSketching, setIsSketching] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -1119,21 +1127,37 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
     setEditingTag(null);
   };
 
+  const finishPolylineDrawing = () => {
+    if (interactionState !== 'drawing_polyline') return;
+    
+    if (!selectedType || !selectedSubType || currentDrawingCoords.length < 2) {
+      setInteractionState('idle');
+      setSelectedType(null);
+      setSelectedSubType(null);
+      setCurrentDrawingCoords([]);
+      return;
+    }
+    const newFeature: CensusFeature = {
+      id: `${Date.now()}`,
+      type: selectedType,
+      subType: selectedSubType.id,
+      geometry: { type: 'LineString', coordinates: currentDrawingCoords },
+      properties: { label: '', timestamp: Date.now() }
+    };
+    updateProject({ features: [...project.features, newFeature] });
+    setInteractionState('idle');
+    setSelectedType(null);
+    setSelectedSubType(null);
+    setCurrentDrawingCoords([]);
+  };
+
   const exportMap = async () => {
     if (!exportRef.current || isExporting) return;
 
     try {
       setIsExporting(true);
       setExportError(null);
-      const dataUrl = await withTimeout(
-        toPng(exportRef.current, {
-          cacheBust: true,
-          pixelRatio: 2,
-          filter: (node) => !(node instanceof HTMLElement && node.dataset.exportHidden === 'true')
-        }),
-        exportTimeoutMs,
-        'Export timed out'
-      );
+      const dataUrl = await captureMapImage(exportRef.current, { timeoutMs: exportTimeoutMs });
       const link = document.createElement('a');
       link.download = `census-map-${new Date().toISOString().slice(0, 10)}.png`;
       link.href = dataUrl;
@@ -1143,6 +1167,54 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
       setExportError('Export failed. Retry, or switch to road map if satellite tiles are not available offline.');
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const goToSketch = async () => {
+    if (!exportRef.current || !mapRef.current || isSketching || isExporting) return;
+    if (project.boundary.length < 3) {
+      setExportError('Confirm a boundary before generating a sketch.');
+      return;
+    }
+
+    const map = mapRef.current;
+    const previousLayer = baseLayer;
+    const previousDraft = draftOverlay;
+    const sketchPixelRatio = 2;
+
+    try {
+      setIsSketching(true);
+      setExportError(null);
+
+      // Satellite + hide layout so OpenCV sees high-contrast roofs/roads
+      flushSync(() => {
+        setBaseLayer('satellite');
+        if (project.layoutOverlay) {
+          setDraftOverlay({ ...project.layoutOverlay, isVisible: false });
+        }
+      });
+
+      fitMapToBoundary(map, project.boundary);
+      await waitForMapIdle(map, 1400);
+
+      const dataUrl = await captureMapImage(exportRef.current, {
+        pixelRatio: sketchPixelRatio,
+        timeoutMs: exportTimeoutMs,
+      });
+      const overlay = buildSketchOverlay(map, project.boundary, project.features, sketchPixelRatio);
+
+      await clearSketchResult();
+      await setSketchSource(dataUrl, overlay);
+      router.push('/sketch');
+    } catch (err) {
+      console.error('Sketch capture failed', err);
+      setExportError('Could not capture map for sketch. Retry.');
+    } finally {
+      flushSync(() => {
+        setBaseLayer(previousLayer);
+        setDraftOverlay(previousDraft);
+      });
+      setIsSketching(false);
     }
   };
 
@@ -1214,6 +1286,11 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
           }}
           onDeleteFeature={deleteTag}
           onEditFeature={setEditingTag}
+          onUpdateFeature={(id, label) => {
+            updateProject({
+              features: project.features.map(f => f.id === id ? { ...f, properties: { ...f.properties, label } } : f)
+            });
+          }}
           language={language}
           onToggleLanguage={() => setLanguage(l => l === 'en' ? 'ml' : 'en')}
         />
@@ -1221,19 +1298,14 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
 
       <div ref={exportRef} className="relative flex-1 h-dvh overflow-hidden bg-white">
         {interactionState !== 'idle' && selectedSubType && (
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-[2000] flex items-center gap-3 px-4 py-2 rounded-full bg-white/90 backdrop-blur-md shadow-lg border border-gray-200 text-sm font-semibold text-indigo-900 animate-in fade-in slide-in-from-top-4">
+          <div data-export-hidden="true" className="absolute top-4 left-1/2 -translate-x-1/2 z-[2000] flex items-center gap-3 px-4 py-2 rounded-full bg-white/90 backdrop-blur-md shadow-lg border border-gray-200 text-sm font-semibold text-indigo-900 animate-in fade-in slide-in-from-top-4">
             <span className="pointer-events-none">
               {interactionState === 'placement_point'
                 ? `Tap map to place ${language === 'en' ? selectedSubType.labelEn : selectedSubType.labelMl}`
                 : `Tap to draw ${language === 'en' ? selectedSubType.labelEn : selectedSubType.labelMl}, double-tap to finish`}
             </span>
             <button
-              onClick={() => {
-                setInteractionState('idle');
-                setSelectedType(null);
-                setSelectedSubType(null);
-                setCurrentDrawingCoords([]);
-              }}
+              onClick={finishPolylineDrawing}
               className="ml-2 rounded-full bg-indigo-600 px-3 py-1 text-xs text-white hover:bg-indigo-700 shadow-sm"
             >
               Done
@@ -1291,20 +1363,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             onPolylineClick={(coord) => {
               setCurrentDrawingCoords((prev) => [...prev, coord]);
             }}
-            onPolylineFinish={() => {
-              if (!selectedType || !selectedSubType || currentDrawingCoords.length < 2) return;
-              const newFeature: CensusFeature = {
-                id: `${Date.now()}`,
-                type: selectedType,
-                subType: selectedSubType.id,
-                geometry: { type: 'LineString', coordinates: currentDrawingCoords },
-                properties: { label: '', timestamp: Date.now() }
-              };
-              updateProject({ features: [...project.features, newFeature] });
-              setInteractionState('idle');
-              setSelectedSubType(null);
-              setCurrentDrawingCoords([]);
-            }}
+            onPolylineFinish={finishPolylineDrawing}
           />
           {interactionState === 'drawing_polyline' && currentDrawingCoords.length > 0 && (
             <Polyline
@@ -1343,7 +1402,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             </Marker>
           )}
 
-          {project.isBoundaryConfirmed && <BoundaryMask boundary={visibleBoundary} />}
+          {project.isBoundaryConfirmed && !isSketching && <BoundaryMask boundary={visibleBoundary} />}
           {visibleBoundary.length > 0 && (
             <>
               {shouldCloseBoundaryPath && (
@@ -1468,12 +1527,37 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
                 }
               }}
             >
-              <Popup>
-                <strong>{tag.properties.label}</strong>
-                <br />
-                <span>{tag.subType}</span>
+              <Popup className="custom-feature-popup">
+                <div className="flex flex-col gap-2 min-w-[150px] pt-1">
+                  <div className="flex items-start justify-between gap-3">
+                    <input
+                      autoFocus
+                      type="text"
+                      placeholder="Add label..."
+                      value={tag.properties.label || ''}
+                      onChange={(e) => {
+                        updateProject({
+                          features: project.features.map(f => 
+                            f.id === tag.id ? { ...f, properties: { ...f.properties, label: e.target.value } } : f
+                          )
+                        });
+                      }}
+                      className="w-full font-bold text-gray-900 border-none bg-transparent focus:outline-none focus:ring-0 p-0 text-base"
+                    />
+                    <span className="text-[9px] bg-gray-100 text-gray-500 font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap mt-1">
+                      {tag.subType.replace('_', ' ')}
+                    </span>
+                  </div>
+                </div>
               </Popup>
             </Marker>
+          ) : tag.geometry.type === 'LineString' ? (
+            <PolylineDecorator
+              key={tag.id}
+              positions={(tag.geometry.coordinates as Coordinate[]).map(c => [c.lat, c.lng])}
+              patterns={getLinePattern(tag.type, tag.subType)}
+              onClick={() => setEditingTag(tag)}
+            />
           ) : null)}
         </MapContainer>
 
@@ -1637,8 +1721,17 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             </button>
             <button
               type="button"
+              onClick={goToSketch}
+              disabled={isSketching || isExporting}
+              className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+              title="Sketch map"
+            >
+              {isSketching ? <RefreshCw size={19} className="animate-spin" /> : <Pencil size={19} />}
+            </button>
+            <button
+              type="button"
               onClick={exportMap}
-              disabled={isExporting}
+              disabled={isExporting || isSketching}
               className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
               title="Export map"
             >
@@ -1667,6 +1760,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
 
         {!isSidebarOpen && (mode === 'field' || mode === 'setup') && (
           <button
+            data-export-hidden="true"
             onClick={() => setIsSidebarOpen(true)}
             className="absolute left-3 top-28 z-[900] grid h-10 w-10 place-items-center rounded-lg bg-white/90 text-gray-700 shadow-sm backdrop-blur transition-all hover:bg-white hover:text-gray-900"
             title="Open Map Tools"
