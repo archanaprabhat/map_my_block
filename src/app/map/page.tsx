@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { AlertTriangle, Map, RefreshCw, User } from 'lucide-react';
 import MapUploader from '../../components/MapUploader';
 import { CensusProject, clearProject, emptyProject, getProject, saveProject, DetectedLocation } from '../../lib/storage';
+import { useAppLanguage } from '../../hooks/useAppLanguage';
 
 const primaryColor = '#212121';
 const activeTabKey = 'map-my-block-active-tab';
@@ -24,6 +25,7 @@ type MainTab = 'map' | 'profile';
 
 export default function MapPage() {
   const router = useRouter();
+  const { t } = useAppLanguage();
   const [project, setProject] = useState<CensusProject>(emptyProject);
   const [activeTab, setActiveTab] = useState<MainTab>(() => {
     if (typeof window === 'undefined') return 'map';
@@ -156,8 +158,11 @@ export default function MapPage() {
       <MapUploader
         onSave={replaceLayoutImage}
         onCancel={() => setIsReplacingLayout(false)}
-        title="Change Layout Map"
-        description="Upload and crop the replacement map. Your tags stay saved, but overlay alignment and boundary setup will be redone."
+        title={t('Change Layout Map', 'ലേഔട്ട് മാപ്പ് മാറ്റുക')}
+        description={t(
+          'Upload and crop the replacement map. Your tags stay saved, but overlay alignment and boundary setup will be redone.',
+          'പുതിയ ലേഔട്ട് മാപ്പ് അപ്‌ലോഡ് ചെയ്ത് ക്രോപ്പ് ചെയ്യുക. ടാഗുകൾ സൂക്ഷിക്കും; ഓവർലേ വിന്യാസവും അതിർത്തി സജ്ജീകരണവും വീണ്ടും ചെയ്യേണ്ടി വരും.'
+        )}
       />
     );
   }

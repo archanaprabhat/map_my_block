@@ -7,6 +7,7 @@ import 'cropperjs/dist/cropper.css';
 import { UploadCloud, Check, X, Search, ChevronDown, ChevronUp, ArrowRight, ArrowLeft } from 'lucide-react';
 import { extractCoordinates, reverseGeocode } from '../lib/location';
 import { DetectedLocation } from '../lib/storage';
+import { useAppLanguage } from '../hooks/useAppLanguage';
 
 const primaryColor = '#212121';
 const draftImageKey = 'map-my-block-upload-draft';
@@ -22,9 +23,10 @@ interface MapUploaderProps {
 export default function MapUploader({
   onSave,
   onCancel,
-  title = 'Upload Layout Map',
-  description = 'Upload the government-issued Houselisting Block layout map to use as a reference.'
+  title,
+  description,
 }: MapUploaderProps) {
+  const { language, toggleLanguage, t } = useAppLanguage();
   const [currentStep, setCurrentStep] = useState<1 | 2>(1);
   const [croppedData, setCroppedData] = useState<{ image: string; aspectRatio: number } | null>(null);
 
@@ -36,7 +38,6 @@ export default function MapUploader({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Location Detection State
   const [smsText, setSmsText] = useState('');
   const [locationStatus, setLocationStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [detectedLocation, setDetectedLocation] = useState<DetectedLocation | null>(null);
@@ -44,9 +45,19 @@ export default function MapUploader({
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [manualLat, setManualLat] = useState('');
   const [manualLng, setManualLng] = useState('');
+  const [manualQ, setManualQ] = useState('');
 
   const cropperRef = useRef<ReactCropperElement>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const pageTitle =
+    title ?? t('Upload Layout Map', 'ലേഔട്ട് മാപ്പ് അപ്‌ലോഡ് ചെയ്യുക');
+  const pageDescription =
+    description ??
+    t(
+      'Upload the government-issued Houselisting Block (HLB) layout map to use as a reference.',
+      'സർക്കാർ നൽകിയ ഹൗസ് ലിസ്റ്റിംഗ് ബ്ലോക്ക് (HLB) ലേഔട്ട് മാപ്പ് റഫറൻസായി ഉപയോഗിക്കുന്നതിനായി അപ്‌ലോഡ് ചെയ്യുക.'
+    );
 
   const processLocationLookup = async (lat: number, lng: number) => {
     if (detectedLocation && detectedLocation.lat === lat && detectedLocation.lng === lng) {
@@ -61,7 +72,12 @@ export default function MapUploader({
       setLocationStatus('success');
     } catch (err) {
       setDetectedLocation(null);
-      setLocationError("Couldn't detect coordinates or location from the pasted text.");
+      setLocationError(
+        t(
+          "Couldn't detect coordinates or location from the pasted text.",
+          'ഒട്ടിച്ച വാചകത്തിൽ നിന്ന് ലൊക്കേഷൻ കണ്ടെത്താനായില്ല.'
+        )
+      );
       setLocationStatus('error');
     }
   };
@@ -80,10 +96,15 @@ export default function MapUploader({
     searchTimeoutRef.current = setTimeout(() => {
       const coords = extractCoordinates(smsText);
       if (coords) {
-        processLocationLookup(coords.lat, coords.lng);
+        void processLocationLookup(coords.lat, coords.lng);
       } else {
         setDetectedLocation(null);
-        setLocationError("Couldn't detect coordinates from the pasted text.");
+        setLocationError(
+          t(
+            "Couldn't detect coordinates from the pasted text.",
+            'ഒട്ടിച്ച വാചകത്തിൽ നിന്ന് കോർഡിനേറ്റുകൾ കണ്ടെത്താനായില്ല.'
+          )
+        );
         setLocationStatus('error');
       }
     }, 500);
@@ -91,15 +112,16 @@ export default function MapUploader({
     return () => {
       if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- debounce on smsText; language only affects error copy
   }, [smsText]);
 
   const handleManualSearch = () => {
     const lat = parseFloat(manualLat);
     const lng = parseFloat(manualLng);
     if (!isNaN(lat) && !isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
-      processLocationLookup(lat, lng);
+      void processLocationLookup(lat, lng);
     } else {
-      setLocationError("Invalid latitude or longitude.");
+      setLocationError(t('Invalid latitude or longitude.', 'അസാധുവായ അക്ഷാംശം അല്ലെങ്കിൽ രേഖാംശം.'));
       setLocationStatus('error');
     }
   };
@@ -109,7 +131,9 @@ export default function MapUploader({
       const file = acceptedFiles[0];
       setErrorMessage(null);
       if (file.size > maxUploadBytes) {
-        setErrorMessage('Image is larger than 10MB. Please choose a smaller file.');
+        setErrorMessage(
+          t('Image is larger than 10MB. Please choose a smaller file.', 'ചിത്രം 10 MB-യിൽ കൂടുതലാണ്. ചെറിയ ഫയൽ തിരഞ്ഞെടുക്കുക.')
+        );
         return;
       }
 
@@ -125,7 +149,7 @@ export default function MapUploader({
         }
       };
       reader.onerror = () => {
-        setErrorMessage('Could not read this image. Please try another file.');
+        setErrorMessage(t('Could not read this image. Please try another file.', 'ഈ ചിത്രം വായിക്കാനായില്ല. മറ്റൊരു ഫയൽ ശ്രമിക്കുക.'));
       };
       reader.readAsDataURL(file);
     }
@@ -136,18 +160,19 @@ export default function MapUploader({
     accept: { 'image/*': [] },
     maxSize: maxUploadBytes,
     multiple: false,
-    onDropRejected: () => setErrorMessage('Only image files up to 10MB can be uploaded.')
+    onDropRejected: () =>
+      setErrorMessage(t('Only image files up to 10MB can be uploaded.', '10 MB വരെയുള്ള ചിത്ര ഫയലുകൾ മാത്രമേ അപ്‌ലോഡ് ചെയ്യാവൂ.')),
   });
 
   const handleNextStep = () => {
     const cropper = cropperRef.current?.cropper;
     const croppedCanvas = cropper?.getCroppedCanvas({
       maxWidth: 2048,
-      maxHeight: 2048
+      maxHeight: 2048,
     });
 
     if (!croppedCanvas) {
-      setErrorMessage('Cropper is not ready yet. Please retry in a moment.');
+      setErrorMessage(t('Cropper is not ready yet. Please retry in a moment.', 'ക്രോപ്പർ തയ്യാറല്ല. അൽപസമയം കഴിഞ്ഞ് വീണ്ടും ശ്രമിക്കുക.'));
       return;
     }
 
@@ -167,29 +192,41 @@ export default function MapUploader({
       window.sessionStorage.removeItem(draftImageKey);
     } catch (err) {
       console.error('Layout save failed', err);
-      setErrorMessage('Could not save the setup. Please retry.');
+      setErrorMessage(t('Could not save the setup. Please retry.', 'സജ്ജീകരണം സേവ് ചെയ്യാനായില്ല. വീണ്ടും ശ്രമിക്കുക.'));
     } finally {
       setIsSaving(false);
     }
   };
 
+  const langToggle = (
+    <button
+      type="button"
+      onClick={toggleLanguage}
+      className="rounded-full bg-black px-3 py-1.5 text-[11px] font-medium text-white transition hover:bg-gray-800"
+    >
+      {language === 'en' ? 'മലയാളം' : 'English'}
+    </button>
+  );
+
   return (
     <div
-      className="flex flex-col items-center justify-center w-full h-screen bg-cover bg-center p-4 relative"
+      className="relative flex h-screen w-full flex-col items-center justify-center bg-cover bg-center p-4"
       style={{ backgroundImage: 'url(/cover.png)' }}
     >
-      <div className="absolute inset-0 bg-black/10 z-0" />
+      <div className="absolute inset-0 z-0 bg-black/10" />
 
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-[440px] min-h-[520px] p-6 flex flex-col items-stretch relative z-10 transition-all duration-300">
+      <div className="absolute right-4 top-4 z-20 sm:right-6 sm:top-6">{langToggle}</div>
+
+      <div className="relative z-10 flex min-h-[520px] w-full max-w-[440px] flex-col items-stretch rounded-2xl bg-white p-6 shadow-xl transition-all duration-300">
         <div className="mb-2 flex w-full items-start justify-between gap-3">
-          <h2 className="text-2xl font-bold text-gray-800 text-center flex-1">{title}</h2>
+          <h2 className="flex-1 text-center text-2xl font-bold text-gray-800">{pageTitle}</h2>
           {onCancel && (
             <button
               type="button"
               onClick={onCancel}
               className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"
-              title="Cancel"
-              aria-label="Cancel"
+              title={t('Cancel', 'റദ്ദാക്കുക')}
+              aria-label={t('Cancel', 'റദ്ദാക്കുക')}
             >
               <X size={18} />
             </button>
@@ -202,32 +239,38 @@ export default function MapUploader({
           </div>
         )}
 
-        {/* Step 1 */}
         {currentStep === 1 && (
-          <div className="flex flex-col w-full flex-1 animate-in fade-in zoom-in-95 duration-300">
-            <h3 className="text-lg font-semibold text-gray-800 mb-1">Layout Image</h3>
-            <p className="text-gray-500 text-sm mb-4">{description}</p>
+          <div className="flex w-full flex-1 animate-in fade-in zoom-in-95 flex-col duration-300">
+            <h3 className="mb-1 text-lg font-semibold text-gray-800">
+              {t('Layout Map', 'ലേഔട്ട് മാപ്പ്')}
+            </h3>
+            <p className="mb-4 text-sm text-gray-500">{pageDescription}</p>
 
             {!image ? (
               <>
                 <div
                   {...getRootProps()}
-                  className={`w-full h-[280px] border-2 border-dashed rounded-xl p-10 flex flex-col items-center justify-center cursor-pointer transition-colors ${isDragActive ? 'bg-gray-100' : 'border-gray-300 hover:bg-gray-50'
-                    }`}
+                  className={`flex h-[280px] w-full cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-10 transition-colors ${
+                    isDragActive ? 'bg-gray-100' : 'border-gray-300 hover:bg-gray-50'
+                  }`}
                   style={isDragActive ? { borderColor: primaryColor } : undefined}
                 >
                   <input {...getInputProps()} />
-                  <UploadCloud size={48} className="text-gray-400 mb-4" />
-                  <p className="text-gray-600 font-medium text-center">
-                    {isDragActive ? 'Drop image here...' : 'Tap to upload or drag and drop'}
+                  <UploadCloud size={48} className="mb-4 text-gray-400" />
+                  <p className="text-center font-medium text-gray-600">
+                    {isDragActive
+                      ? t('Drop image here...', 'ചിത്രം ഇവിടെ വിടുക...')
+                      : t('Tap to upload or drag and drop', 'ടാപ്പ് ചെയ്ത് അപ്‌ലോഡ് ചെയ്യുക അല്ലെങ്കിൽ ഫയൽ ഇവിടെ വലിച്ചിടുക')}
                   </p>
-                  <p className="text-xs text-gray-400 mt-2 text-center">PNG, JPG up to 10MB</p>
+                  <p className="mt-2 text-center text-xs text-gray-400">
+                    {t('PNG, JPG up to 10MB', 'PNG, JPG ഫയലുകൾ (പരമാവധി 10 MB)')}
+                  </p>
                 </div>
-                <div className="flex w-full space-x-3 mt-auto h-[48px]"></div>
+                <div className="mt-auto flex h-[48px] w-full space-x-3" />
               </>
             ) : (
-              <div className="w-full flex-1 flex flex-col items-center">
-                <div className="w-full h-[280px] bg-gray-100 rounded-lg overflow-hidden mb-4 border border-gray-200">
+              <div className="flex w-full flex-1 flex-col items-center">
+                <div className="mb-4 h-[280px] w-full overflow-hidden rounded-lg border border-gray-200 bg-gray-100">
                   <Cropper
                     ref={cropperRef}
                     style={{ height: '100%', width: '100%' }}
@@ -245,25 +288,27 @@ export default function MapUploader({
                   />
                 </div>
 
-                <div className="flex w-full space-x-3 mt-auto">
+                <div className="mt-auto flex w-full space-x-3">
                   <button
+                    type="button"
                     onClick={() => {
                       setImage(null);
                       setIsCropperReady(false);
                       setErrorMessage(null);
                       window.sessionStorage.removeItem(draftImageKey);
                     }}
-                    className="flex-1 py-3 px-4 bg-gray-100 text-gray-700 font-medium rounded-xl hover:bg-gray-200 transition"
+                    className="flex-1 rounded-xl bg-gray-100 px-4 py-3 font-medium text-gray-700 transition hover:bg-gray-200"
                   >
-                    Cancel
+                    {t('Cancel', 'റദ്ദാക്കുക')}
                   </button>
                   <button
+                    type="button"
                     onClick={handleNextStep}
                     disabled={!isCropperReady}
-                    className="flex-1 py-3 px-4 text-white font-medium rounded-xl transition flex items-center justify-center shadow-md active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none disabled:active:scale-100"
+                    className="flex flex-1 items-center justify-center rounded-xl px-4 py-3 font-medium text-white shadow-md transition active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none disabled:active:scale-100"
                     style={isCropperReady ? { backgroundColor: primaryColor } : undefined}
                   >
-                    Next <ArrowRight size={18} className="ml-2" />
+                    {t('Next', 'അടുത്തത്')} <ArrowRight size={18} className="ml-2" />
                   </button>
                 </div>
               </div>
@@ -271,38 +316,50 @@ export default function MapUploader({
           </div>
         )}
 
-        {/* Step 2 */}
         {currentStep === 2 && (
-          <div className="flex flex-col w-full flex-1 animate-in fade-in zoom-in-95 duration-300">
-            <h3 className="text-lg font-semibold text-gray-800 mb-1">Detect Location</h3>
-            <p className="text-[#757575] text-sm mb-4">Paste your SMS to automatically detect the location.</p>
+          <div className="flex w-full flex-1 animate-in fade-in zoom-in-95 flex-col duration-300">
+            <h3 className="mb-1 text-lg font-semibold text-gray-800">
+              {t('Detect Location', 'ലൊക്കേഷൻ കണ്ടെത്തുക')}
+            </h3>
+            <p className="mb-4 text-sm text-[#757575]">
+              {t(
+                'Paste your SMS to automatically detect the location.',
+                'ലൊക്കേഷൻ സ്വയമേവ കണ്ടെത്തുന്നതിനായി നിങ്ങൾക്ക് ലഭിച്ച SMS ഒട്ടിക്കുക.'
+              )}
+            </p>
 
-            <div className="w-full bg-white border border-gray-200 rounded-xl p-4 shadow-sm mb-5">
+            <div className="mb-5 w-full rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
               <textarea
-                className="w-full min-h-[150px] max-h-[220px] flex-1 p-3 text-sm text-black border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-black outline-none resize-y placeholder:text-[#757575]"
-                placeholder={`Paste the SMS you received...\n\nExample:\nHLB 0588: https://maps.google.com/?q=11.809477,75.481735`}
+                className="min-h-[150px] max-h-[220px] w-full flex-1 resize-y rounded-lg border border-gray-300 p-3 text-sm text-black outline-none placeholder:text-[#757575] focus:border-black focus:ring-2 focus:ring-black"
+                placeholder={
+                  language === 'ml'
+                    ? 'നിങ്ങൾക്ക് ലഭിച്ച SMS ഇവിടെ ഒട്ടിക്കുക...\n\nഉദാഹരണം:\nHLB 0588: https://maps.google.com/?q=11.809477,75.481735'
+                    : 'Paste the SMS you received...\n\nExample:\nHLB 0588: https://maps.google.com/?q=11.809477,75.481735'
+                }
                 value={smsText}
                 onChange={(e) => setSmsText(e.target.value)}
               />
 
-              <div className="mt-3 min-h-[10px] flex items-center">
+              <div className="mt-3 flex min-h-[10px] items-center">
                 {locationStatus === 'loading' && (
-                  <p className="text-sm text-blue-600 flex items-center">
-                    <span className="animate-spin mr-2 h-4 w-4 border-2 border-blue-600 border-t-transparent rounded-full"></span>
-                    Detecting location...
+                  <p className="flex items-center text-sm text-blue-600">
+                    <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent" />
+                    {t('Detecting location...', 'ലൊക്കേഷൻ കണ്ടെത്തുന്നു...')}
                   </p>
                 )}
                 {locationStatus === 'success' && detectedLocation && (
-                  <div className="text-sm text-green-700 bg-green-50 p-2 rounded-lg flex items-start w-full border border-green-100">
+                  <div className="flex w-full items-start rounded-lg border border-green-100 bg-green-50 p-2 text-sm text-green-700">
                     <Check size={16} className="mr-2 mt-0.5 shrink-0" />
                     <div>
-                      <p className="font-medium">Location detected</p>
-                      <p className="text-green-600 text-xs mt-0.5 line-clamp-2" title={detectedLocation.displayName}>{detectedLocation.displayName}</p>
+                      <p className="font-medium">{t('Location detected', 'ലൊക്കേഷൻ കണ്ടെത്തി')}</p>
+                      <p className="mt-0.5 line-clamp-2 text-xs text-green-600" title={detectedLocation.displayName}>
+                        {detectedLocation.displayName}
+                      </p>
                     </div>
                   </div>
                 )}
                 {locationStatus === 'error' && (
-                  <p className="text-sm text-red-600 bg-red-50 p-2 rounded-lg border border-red-100 flex items-center w-full">
+                  <p className="flex w-full items-center rounded-lg border border-red-100 bg-red-50 p-2 text-sm text-red-600">
                     <X size={16} className="mr-2 shrink-0" />
                     {locationError}
                   </p>
@@ -313,78 +370,100 @@ export default function MapUploader({
                 <button
                   type="button"
                   onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
-                  className="flex items-center text-xs font-medium text-gray-500 hover:text-gray-700 transition"
+                  className="flex items-center text-xs font-medium text-gray-500 transition hover:text-gray-700"
                 >
                   {isAdvancedOpen ? <ChevronUp size={14} className="mr-1" /> : <ChevronDown size={14} className="mr-1" />}
-                  Advanced Options
+                  {t('Advanced Options', 'കൂടുതൽ ഓപ്ഷനുകൾ')}
                 </button>
 
-                <div className="mt-3 flex gap-2 h-[34px]">
-                  {isAdvancedOpen && (
-                    <>
+                {isAdvancedOpen && (
+                  <div className="mt-3 flex flex-col gap-2">
+                    <div className="flex gap-2">
                       <input
                         type="number"
-                        placeholder="Latitude"
+                        placeholder={t('Latitude', 'അക്ഷാംശം')}
                         value={manualLat}
                         onChange={(e) => setManualLat(e.target.value)}
-                        className="flex-1 w-full p-2 text-xs border border-gray-300 rounded-lg outline-none placeholder:text-[#757575]"
+                        className="w-full flex-1 rounded-lg border border-gray-300 p-2 text-xs outline-none placeholder:text-[#757575]"
                       />
                       <input
                         type="number"
-                        placeholder="Longitude"
+                        placeholder={t('Longitude', 'രേഖാംശം')}
                         value={manualLng}
                         onChange={(e) => setManualLng(e.target.value)}
-                        className="flex-1 w-full p-2 text-xs border border-gray-300 rounded-lg outline-none placeholder:text-[#757575]"
+                        className="w-full flex-1 rounded-lg border border-gray-300 p-2 text-xs outline-none placeholder:text-[#757575]"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder={t('Q value', 'Q മൂല്യം')}
+                        value={manualQ}
+                        onChange={(e) => setManualQ(e.target.value)}
+                        className="w-full flex-1 rounded-lg border border-gray-300 p-2 text-xs outline-none placeholder:text-[#757575]"
                       />
                       <button
                         type="button"
                         onClick={handleManualSearch}
-                        className="p-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
-                        title="Search Coordinates"
+                        className="rounded-lg bg-gray-100 p-2 text-gray-700 hover:bg-gray-200"
+                        title={t('Search Coordinates', 'കോർഡിനേറ്റുകൾ തിരയുക')}
                       >
                         <Search size={16} />
                       </button>
-                    </>
-                  )}
-                </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            <div className="flex w-full space-x-3 mt-auto">
+            <div className="mt-auto flex w-full space-x-3">
               <button
+                type="button"
                 onClick={() => setCurrentStep(1)}
-                className="flex-[1] py-3 px-4 bg-gray-100 text-gray-700 font-medium rounded-xl hover:bg-gray-200 transition flex items-center justify-center"
+                className="flex flex-[1] items-center justify-center rounded-xl bg-gray-100 px-4 py-3 font-medium text-gray-700 transition hover:bg-gray-200"
               >
-                <ArrowLeft size={18} className="mr-2" /> Back
+                <ArrowLeft size={18} className="mr-2" /> {t('Back', 'തിരികെ')}
               </button>
               <button
-                onClick={handleFinishSetup}
+                type="button"
+                onClick={() => void handleFinishSetup()}
                 disabled={isSaving}
-                className="flex-[2] py-3 px-4 text-white font-medium rounded-xl transition flex items-center justify-center shadow-md active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none disabled:active:scale-100"
+                className="flex flex-[2] items-center justify-center rounded-xl px-4 py-3 font-medium text-white shadow-md transition active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-300 disabled:shadow-none disabled:active:scale-100"
                 style={{ backgroundColor: primaryColor }}
               >
                 <Check size={20} className="mr-2" />
-                {isSaving ? 'Saving...' : 'Finish Setup'}
+                {isSaving
+                  ? t('Saving...', 'സേവ് ചെയ്യുന്നു...')
+                  : t('Finish Setup', 'സജ്ജീകരണം പൂർത്തിയാക്കുക')}
               </button>
             </div>
           </div>
         )}
 
-        {/* Step Indicators */}
-        <div className="flex items-center justify-center mt-6 w-full gap-2">
+        <div className="mt-6 flex w-full items-center justify-center gap-2">
           <button
+            type="button"
             onClick={() => setCurrentStep(1)}
-            className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-colors border-2 ${currentStep >= 1 ? 'bg-[#000] text-white border-[#000]' : 'bg-white text-gray-400 border-gray-300'}`}
+            className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-sm font-bold transition-colors ${
+              currentStep >= 1 ? 'border-[#000] bg-[#000] text-white' : 'border-gray-300 bg-white text-gray-400'
+            }`}
           >
             1
           </button>
-          <div className="w-16 h-[2px] bg-gray-200 relative overflow-hidden">
-            <div className={`absolute top-0 left-0 h-full bg-[#000] transition-all duration-300 ${currentStep === 2 ? 'w-full' : 'w-0'}`} />
+          <div className="relative h-[2px] w-16 overflow-hidden bg-gray-200">
+            <div
+              className={`absolute left-0 top-0 h-full bg-[#000] transition-all duration-300 ${
+                currentStep === 2 ? 'w-full' : 'w-0'
+              }`}
+            />
           </div>
           <button
+            type="button"
             onClick={() => image && croppedData && setCurrentStep(2)}
             disabled={!image || !croppedData}
-            className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-colors border-2 ${currentStep === 2 ? 'bg-[#000] text-white border-[#000]' : 'bg-white text-gray-400 border-gray-300'}`}
+            className={`flex h-8 w-8 items-center justify-center rounded-full border-2 text-sm font-bold transition-colors ${
+              currentStep === 2 ? 'border-[#000] bg-[#000] text-white' : 'border-gray-300 bg-white text-gray-400'
+            }`}
           >
             2
           </button>
