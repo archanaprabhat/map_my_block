@@ -1,36 +1,66 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Map My Block
 
-## Getting Started
+A mobile-first PWA for Census 2027 enumerators to digitize and map their assigned block areas without manual paper drawing.
 
-First, run the development server:
+## Features
+
+- **No Login Required** — Upload layout map, align with OpenStreetMap, and start mapping
+- **Image Overlay & Alignment** — Crop, rotate, scale layout maps over live OSM tiles
+- **Boundary Mapping** — Draw boundary polygons around your census block
+- **Tagged Data Collection** — Drop color-coded tags for houses, businesses, schools, and other landmarks
+- **Offline Support** — Saved maps work offline; auto-retries fetches when reconnected
+- **Export Ready** — Download high-quality A4 map images for supervisor submission
+- **Auto-Fetch Layers** — Automatically fetch building footprints and OSM road/water data
+
+## Tech Stack
+
+- **Framework**: Next.js 16 (React + TypeScript)
+- **Mapping**: Leaflet with OpenStreetMap
+- **Libraries**: react-cropper, leaflet-draw, localforage
+- **PWA**: next-pwa with service worker
+- **Storage**: IndexedDB + localStorage (persistent offline data)
+- **Sketch**: OpenCV.js in Web Worker for vector map generation
+
+## Quick Start
+
+### Installation
+
+```bash
+npm install
+```
+
+### Development
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# Open http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Build & Deploy
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run build
+npm run start
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Workflow
 
-## Learn More
+1. **Upload** — Load a layout map image of your block
+2. **Crop** — Trim unnecessary areas using the built-in cropper
+3. **Align** — Position the layout over OpenStreetMap using drag, rotate, and scale
+4. **Boundary** — Draw a polygon around the block perimeter
+5. **Tag** — Drop colored markers for each house, shop, school, etc.
+6. **Export** — Download the final map as a high-resolution image
 
-To learn more about Next.js, take a look at the following resources:
+## Offline Behavior
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- Saved project data persists in IndexedDB
+- Maps remain accessible without internet
+- Fetched data (buildings, roads) auto-retries when reconnected
+- Service worker caches essential assets and tiles
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Browser Support
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Modern browsers with ES2020+ support
+- Tested on iOS 14+ and Android Chrome
+- Works best with GPS access for location alignment
