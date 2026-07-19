@@ -870,14 +870,18 @@ export const getSvgString = (type: TagType, subType: string) => {
 
 export const createTagIcon = (tag: CensusFeature) => {
   const svgString = getSvgString(tag.type, tag.subType);
+  const scale = Math.min(2.5, Math.max(0.7, Number(tag.properties.iconScale) || 1));
+  const base = 34;
+  const size = Math.round(base * scale);
+  const fontSize = Math.max(10, Math.round(12 * scale));
 
-  let html = `<span style="background:${tagColors[tag.type] ?? primaryColor}">${tag.properties.label ?? ''}</span>`;
+  let html = `<span style="background:${tagColors[tag.type] ?? primaryColor};display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;font-size:${fontSize}px;color:#fff;font-weight:700;">${tag.properties.label ?? ''}</span>`;
 
   if (svgString) {
     html = `
-      <div style="position: relative; width: 34px; height: 34px;">
-        ${svgString}
-        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-size: 12px; font-weight: bold; pointer-events: none;">${tag.properties.label ?? ''}</div>
+      <div style="position: relative; width: ${size}px; height: ${size}px;">
+        <div style="width:100%;height:100%;">${svgString}</div>
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: white; font-size: ${fontSize}px; font-weight: bold; pointer-events: none; text-shadow: 0 0 2px #000;">${tag.properties.label ?? ''}</div>
       </div>
     `;
   }
@@ -885,8 +889,8 @@ export const createTagIcon = (tag: CensusFeature) => {
   return L.divIcon({
     className: 'census-tag-icon',
     html,
-    iconSize: [34, 34],
-    iconAnchor: [17, 17]
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2]
   });
 };
 

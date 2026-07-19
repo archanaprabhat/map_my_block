@@ -277,7 +277,7 @@ export default function MapUploader({
             <h3 className="text-lg font-semibold text-gray-800 mb-1">Detect Location</h3>
             <p className="text-[#757575] text-sm mb-4">Paste your SMS to automatically detect the location.</p>
 
-            <div className="w-full bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+            <div className="w-full bg-white border border-gray-200 rounded-xl p-4 shadow-sm mb-5">
               <textarea
                 className="w-full min-h-[150px] max-h-[220px] flex-1 p-3 text-sm text-black border border-gray-300 rounded-lg focus:ring-2 focus:ring-black focus:border-black outline-none resize-y placeholder:text-[#757575]"
                 placeholder={`Paste the SMS you received...\n\nExample:\nHLB 0588: https://maps.google.com/?q=11.809477,75.481735`}

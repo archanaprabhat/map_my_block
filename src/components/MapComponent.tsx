@@ -1,7 +1,6 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { flushSync } from 'react-dom';
 import { MapContainer, Marker, Polygon, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -21,8 +20,7 @@ import {
   Minimize2,
   Minus,
   Menu,
-  Move,
-  Pencil,
+  SquarePen,
   Plus,
   RotateCcw,
   RotateCw,
@@ -30,18 +28,24 @@ import {
   Search,
   Trash2,
   Unlock,
-  X
+  X,
+  Sparkle,
+  WandSparkles,
+  Building2,
+  Trees
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import { CensusProject, Coordinate, CensusFeature, LayoutOverlay, TagType } from '../lib/storage';
+import { CensusProject, Coordinate, CensusFeature, LayoutOverlay, TagType, emptyAutoFetchLayers } from '../lib/storage';
 import SidebarControls, { SubTypeOption } from './SidebarControls';
+import AutoFetchModal from './AutoFetchModal';
 import { createTagIcon, tagColors, getLinePattern } from './TagIcons';
 import PolylineDecorator from './PolylineDecorator';
 import { exportGeoJSON } from '../lib/geojsonExport';
 import { APP_ONLINE_EVENT, isConnectivityError, restartApp, withTimeout } from '../lib/reliability';
 import { captureMapImage } from '../lib/captureMapImage';
-import { setSketchSource, clearSketchResult } from '../lib/sketch/sketchTransfer';
-import { buildSketchOverlay, fitMapToBoundary, waitForMapIdle } from '../lib/sketch/prepareSketchCapture';
+import { setHlbProject, clearHlbTransfer } from '../lib/hlb/hlbTransfer';
+import { fetchGoogleOpenBuildings } from '../lib/autoFetch/googleBuildings';
+import { fetchOsmAutoLayers } from '../lib/autoFetch/osmAutoLayers';
 
 type AppMode = 'setup' | 'field';
 type ProfileTab = 'map' | 'profile';
@@ -94,6 +98,7 @@ const tileLayers = {
 const mapPanes = {
   boundaryMask: 'boundary-mask-pane',
   boundary: 'boundary-pane',
+  autoFetch: 'auto-fetch-pane',
   features: 'feature-pane'
 } as const;
 
@@ -101,6 +106,7 @@ const mapLayerZIndexes = {
   layoutOverlay: 550,
   boundaryMask: 560,
   boundary: 700,
+  autoFetch: 720,
   features: 740
 };
 
@@ -520,6 +526,7 @@ function MapLayerPanes() {
     const panes = [
       [mapPanes.boundaryMask, mapLayerZIndexes.boundaryMask],
       [mapPanes.boundary, mapLayerZIndexes.boundary],
+      [mapPanes.autoFetch, mapLayerZIndexes.autoFetch],
       [mapPanes.features, mapLayerZIndexes.features]
     ] as const;
 
@@ -891,6 +898,11 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
   const [isSketching, setIsSketching] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const [locationError, setLocationError] = useState<string | null>(null);
+  const [isAutoFetchOpen, setIsAutoFetchOpen] = useState(false);
+  const [buildingsLoading, setBuildingsLoading] = useState(false);
+  const [buildingsProgress, setBuildingsProgress] = useState<number | undefined>(undefined);
+  const [osmLoading, setOsmLoading] = useState(false);
+  const [autoFetchError, setAutoFetchError] = useState<string | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const exportRef = useRef<HTMLDivElement>(null);
   const segmentDragRef = useRef<SegmentDragState | null>(null);
@@ -1129,7 +1141,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
 
   const finishPolylineDrawing = () => {
     if (interactionState !== 'drawing_polyline') return;
-    
+
     if (!selectedType || !selectedSubType || currentDrawingCoords.length < 2) {
       setInteractionState('idle');
       setSelectedType(null);
@@ -1170,52 +1182,140 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
     }
   };
 
-  const goToSketch = async () => {
-    if (!exportRef.current || !mapRef.current || isSketching || isExporting) return;
+  const prepareHlbSnapshot = async () => {
     if (project.boundary.length < 3) {
-      setExportError('Confirm a boundary before generating a sketch.');
+      throw new Error('Confirm a boundary before generating an HLB map.');
+    }
+    await clearHlbTransfer();
+    await setHlbProject(project);
+  };
+
+  /** Prefetch so right-click → Open in new tab / middle-click has data ready. */
+  const prefetchHlbSnapshot = () => {
+    if (project.boundary.length < 3 || isExporting || isSketching) return;
+    void prepareHlbSnapshot().catch(() => {
+      /* ignore prefetch errors */
+    });
+  };
+
+  const goToSketch = async (event?: React.MouseEvent) => {
+    if (isSketching || isExporting) return;
+    if (project.boundary.length < 3) {
+      setExportError('Confirm a boundary before generating an HLB map.');
       return;
     }
 
-    const map = mapRef.current;
-    const previousLayer = baseLayer;
-    const previousDraft = draftOverlay;
-    const sketchPixelRatio = 2;
+    // Ctrl/Cmd/Shift/Alt or middle-click → native <a> new-tab navigation
+    if (event && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button === 1)) {
+      return;
+    }
 
     try {
       setIsSketching(true);
       setExportError(null);
-
-      // Satellite + hide layout so OpenCV sees high-contrast roofs/roads
-      flushSync(() => {
-        setBaseLayer('satellite');
-        if (project.layoutOverlay) {
-          setDraftOverlay({ ...project.layoutOverlay, isVisible: false });
-        }
-      });
-
-      fitMapToBoundary(map, project.boundary);
-      await waitForMapIdle(map, 1400);
-
-      const dataUrl = await captureMapImage(exportRef.current, {
-        pixelRatio: sketchPixelRatio,
-        timeoutMs: exportTimeoutMs,
-      });
-      const overlay = buildSketchOverlay(map, project.boundary, project.features, sketchPixelRatio);
-
-      await clearSketchResult();
-      await setSketchSource(dataUrl, overlay);
+      await prepareHlbSnapshot();
       router.push('/sketch');
     } catch (err) {
-      console.error('Sketch capture failed', err);
-      setExportError('Could not capture map for sketch. Retry.');
+      console.error('HLB prepare failed', err);
+      setExportError('Could not prepare HLB map. Retry.');
     } finally {
-      flushSync(() => {
-        setBaseLayer(previousLayer);
-        setDraftOverlay(previousDraft);
-      });
       setIsSketching(false);
     }
+  };
+
+  const autoLayers = project.autoFetchLayers ?? emptyAutoFetchLayers();
+
+  const handleFetchBuildings = async () => {
+    if (project.boundary.length < 3 || !project.isBoundaryConfirmed) {
+      setAutoFetchError('Confirm your boundary before fetching buildings.');
+      return;
+    }
+    setBuildingsLoading(true);
+    setBuildingsProgress(0);
+    setAutoFetchError(null);
+    try {
+      const footprints = await fetchGoogleOpenBuildings(project.boundary, setBuildingsProgress);
+      updateProject({
+        autoFetchLayers: {
+          ...autoLayers,
+          buildings: {
+            fetched: true,
+            visible: true,
+            fetchedAt: Date.now(),
+            footprints,
+          },
+        },
+      });
+    } catch (err) {
+      console.error('Google Open Buildings fetch failed', err);
+      setAutoFetchError(
+        isConnectivityError(err)
+          ? 'Could not reach Google Open Buildings. Check your connection and retry.'
+          : err instanceof Error
+            ? err.message
+            : 'Building fetch failed. Retry.'
+      );
+    } finally {
+      setBuildingsLoading(false);
+      setBuildingsProgress(undefined);
+    }
+  };
+
+  const handleFetchOsm = async () => {
+    if (project.boundary.length < 3 || !project.isBoundaryConfirmed) {
+      setAutoFetchError('Confirm your boundary before fetching OSM layers.');
+      return;
+    }
+    setOsmLoading(true);
+    setAutoFetchError(null);
+    try {
+      const result = await fetchOsmAutoLayers(project.boundary);
+      updateProject({
+        autoFetchLayers: {
+          ...autoLayers,
+          osmContext: {
+            fetched: true,
+            visible: true,
+            fetchedAt: Date.now(),
+            roads: result.roads,
+            forests: result.forests,
+            waters: result.waters,
+            landmarks: result.landmarks,
+          },
+        },
+      });
+    } catch (err) {
+      console.error('OSM auto-fetch failed', err);
+      setAutoFetchError(
+        isConnectivityError(err)
+          ? 'Could not reach OpenStreetMap. Check your connection and retry.'
+          : err instanceof Error
+            ? err.message
+            : 'OSM fetch failed. Retry.'
+      );
+    } finally {
+      setOsmLoading(false);
+    }
+  };
+
+  const toggleBuildingsVisible = () => {
+    if (!autoLayers.buildings.fetched) return;
+    updateProject({
+      autoFetchLayers: {
+        ...autoLayers,
+        buildings: { ...autoLayers.buildings, visible: !autoLayers.buildings.visible },
+      },
+    });
+  };
+
+  const toggleOsmVisible = () => {
+    if (!autoLayers.osmContext.fetched) return;
+    updateProject({
+      autoFetchLayers: {
+        ...autoLayers,
+        osmContext: { ...autoLayers.osmContext, visible: !autoLayers.osmContext.visible },
+      },
+    });
   };
 
   if (activeTab === 'profile') {
@@ -1402,7 +1502,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             </Marker>
           )}
 
-          {project.isBoundaryConfirmed && !isSketching && <BoundaryMask boundary={visibleBoundary} />}
+          {project.isBoundaryConfirmed && <BoundaryMask boundary={visibleBoundary} />}
           {visibleBoundary.length > 0 && (
             <>
               {shouldCloseBoundaryPath && (
@@ -1507,6 +1607,103 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             </Marker>
           ))}
 
+          {autoLayers.buildings.visible &&
+            autoLayers.buildings.footprints.map((building) => (
+              <Polygon
+                key={building.id}
+                pane={mapPanes.autoFetch}
+                positions={building.ring.map(toLatLngTuple)}
+                pathOptions={{
+                  color: '#ea580c',
+                  weight: 1.5,
+                  fillColor: '#fb923c',
+                  fillOpacity: 0.28,
+                  interactive: false,
+                }}
+              />
+            ))}
+
+          {autoLayers.osmContext.visible && (
+            <>
+              {autoLayers.osmContext.forests.map((forest) => (
+                <Polygon
+                  key={forest.id}
+                  pane={mapPanes.autoFetch}
+                  positions={forest.coordinates.map(toLatLngTuple)}
+                  pathOptions={{
+                    color: '#166534',
+                    weight: 1,
+                    fillColor: '#22c55e',
+                    fillOpacity: 0.22,
+                    interactive: false,
+                  }}
+                />
+              ))}
+              {autoLayers.osmContext.waters.map((water) => {
+                const closed =
+                  water.coordinates.length >= 4 &&
+                  Math.abs(water.coordinates[0].lat - water.coordinates[water.coordinates.length - 1].lat) < 1e-7 &&
+                  Math.abs(water.coordinates[0].lng - water.coordinates[water.coordinates.length - 1].lng) < 1e-7;
+                if (closed || water.kind === 'water' || water.kind === 'pond' || water.kind === 'lake' || water.kind === 'reservoir' || water.kind === 'wetland') {
+                  return (
+                    <Polygon
+                      key={`water-${water.id}`}
+                      pane={mapPanes.autoFetch}
+                      positions={water.coordinates.map(toLatLngTuple)}
+                      pathOptions={{
+                        color: '#0369a1',
+                        weight: 1.25,
+                        fillColor: '#38bdf8',
+                        fillOpacity: 0.35,
+                        interactive: false,
+                      }}
+                    />
+                  );
+                }
+                return (
+                  <Polyline
+                    key={`water-${water.id}`}
+                    pane={mapPanes.autoFetch}
+                    positions={water.coordinates.map(toLatLngTuple)}
+                    pathOptions={{
+                      color: '#0284c7',
+                      weight: water.kind === 'river' || water.kind === 'stream' ? 2.5 : 2,
+                      opacity: 0.85,
+                      interactive: false,
+                    }}
+                  />
+                );
+              })}
+              {autoLayers.osmContext.roads.map((road) => (
+                <Polyline
+                  key={`road-${road.id}`}
+                  pane={mapPanes.autoFetch}
+                  positions={road.coordinates.map(toLatLngTuple)}
+                  pathOptions={{
+                    color: '#57534e',
+                    weight: /primary|trunk|motorway/.test(road.highway ?? '') ? 3 : 1.75,
+                    opacity: 0.8,
+                    interactive: false,
+                  }}
+                />
+              ))}
+              {autoLayers.osmContext.landmarks.map((place) => (
+                <Marker
+                  key={`place-${place.id}`}
+                  pane={mapPanes.autoFetch}
+                  position={toLatLngTuple(place.coordinate)}
+                  interactive={false}
+                  icon={L.divIcon({
+                    className: 'osm-landmark-icon',
+                    html: `<div style="transform:translate(-50%,-100%);white-space:nowrap;padding:2px 6px;border-radius:6px;background:rgba(255,255,255,0.88);backdrop-filter:blur(6px);border:1px solid rgba(0,0,0,0.08);font:600 10px/1.2 system-ui,sans-serif;color:#1c1917;box-shadow:0 1px 4px rgba(0,0,0,0.12)">${place.name.replace(/</g, '&lt;')}</div>`,
+                    iconSize: [0, 0],
+                    iconAnchor: [0, 0],
+                  })}
+                />
+              ))}
+            </>
+          )}
+
           {project.features.map((tag) => tag.geometry.type === 'Point' ? (
             <Marker
               key={tag.id}
@@ -1528,7 +1725,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
               }}
             >
               <Popup className="custom-feature-popup">
-                <div className="flex flex-col gap-2 min-w-[150px] pt-1">
+                <div className="flex flex-col gap-2 min-w-[180px] pt-1">
                   <div className="flex items-start justify-between gap-3">
                     <input
                       autoFocus
@@ -1537,7 +1734,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
                       value={tag.properties.label || ''}
                       onChange={(e) => {
                         updateProject({
-                          features: project.features.map(f => 
+                          features: project.features.map(f =>
                             f.id === tag.id ? { ...f, properties: { ...f.properties, label: e.target.value } } : f
                           )
                         });
@@ -1547,6 +1744,50 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
                     <span className="text-[9px] bg-gray-100 text-gray-500 font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap mt-1">
                       {tag.subType.replace('_', ' ')}
                     </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 border-t border-gray-100 pt-2">
+                    <span className="text-xs font-medium text-gray-600">Building size</span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        title="Smaller"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          const current = Math.min(2.5, Math.max(0.7, Number(tag.properties.iconScale) || 1));
+                          const next = Math.round(Math.max(0.7, current - 0.25) * 100) / 100;
+                          updateProject({
+                            features: project.features.map((f) =>
+                              f.id === tag.id ? { ...f, properties: { ...f.properties, iconScale: next } } : f
+                            )
+                          });
+                        }}
+                        className="grid h-7 w-7 place-items-center rounded-md border border-gray-200 bg-white text-sm font-bold text-gray-800 hover:bg-gray-50"
+                      >
+                        −
+                      </button>
+                      <span className="min-w-[2.5rem] text-center text-xs font-semibold text-gray-700">
+                        {Math.round((Number(tag.properties.iconScale) || 1) * 100)}%
+                      </span>
+                      <button
+                        type="button"
+                        title="Larger"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          const current = Math.min(2.5, Math.max(0.7, Number(tag.properties.iconScale) || 1));
+                          const next = Math.round(Math.min(2.5, current + 0.25) * 100) / 100;
+                          updateProject({
+                            features: project.features.map((f) =>
+                              f.id === tag.id ? { ...f, properties: { ...f.properties, iconScale: next } } : f
+                            )
+                          });
+                        }}
+                        className="grid h-7 w-7 place-items-center rounded-md border border-gray-200 bg-white text-sm font-bold text-gray-800 hover:bg-gray-50"
+                      >
+                        +
+                      </button>
+                    </div>
                   </div>
                 </div>
               </Popup>
@@ -1709,7 +1950,43 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
         )}
 
         {mode === 'field' && (
-          <div data-export-hidden="true" className="absolute inset-x-3 bottom-20 z-[1000] flex gap-2">
+          <div data-export-hidden="true" className="absolute inset-x-3 bottom-20 z-[1100] flex flex-col gap-2">
+            {(autoLayers.buildings.fetched || autoLayers.osmContext.fetched) && (
+              <div className="flex flex-wrap gap-2">
+                {autoLayers.buildings.fetched && (
+                  <button
+                    type="button"
+                    onClick={toggleBuildingsVisible}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/50 bg-white/55 px-3 py-1.5 text-xs font-semibold text-gray-900 shadow-lg backdrop-blur-md"
+                    title={autoLayers.buildings.visible ? 'Hide Google buildings' : 'Show Google buildings'}
+                  >
+                    <Building2 size={14} className="text-orange-600" />
+                    <span>Buildings</span>
+                    <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-800">
+                      Fetched
+                    </span>
+                    <span className="text-[10px] text-gray-600">{autoLayers.buildings.footprints.length}</span>
+                    {autoLayers.buildings.visible ? <Eye size={14} /> : <EyeOff size={14} className="text-gray-400" />}
+                  </button>
+                )}
+                {autoLayers.osmContext.fetched && (
+                  <button
+                    type="button"
+                    onClick={toggleOsmVisible}
+                    className="inline-flex items-center gap-2 rounded-full border border-white/50 bg-white/55 px-3 py-1.5 text-xs font-semibold text-gray-900 shadow-lg backdrop-blur-md"
+                    title={autoLayers.osmContext.visible ? 'Hide OSM layers' : 'Show OSM layers'}
+                  >
+                    <Trees size={14} className="text-green-700" />
+                    <span>Roads & landmarks</span>
+                    <span className="rounded-full bg-emerald-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-emerald-800">
+                      Fetched
+                    </span>
+                    {autoLayers.osmContext.visible ? <Eye size={14} /> : <EyeOff size={14} className="text-gray-400" />}
+                  </button>
+                )}
+              </div>
+            )}
+            <div className="flex gap-2">
             <button
               type="button"
               onClick={() => setIsSidebarOpen(true)}
@@ -1721,13 +1998,50 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             </button>
             <button
               type="button"
-              onClick={goToSketch}
-              disabled={isSketching || isExporting}
-              className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
-              title="Sketch map"
+              onClick={() => {
+                setAutoFetchError(null);
+                setIsAutoFetchOpen(true);
+              }}
+              className="flex h-12 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-white px-3 text-xs font-semibold text-gray-900 shadow-lg"
+              title="Fetch automatically"
             >
-              {isSketching ? <RefreshCw size={19} className="animate-spin" /> : <Pencil size={19} />}
+              <WandSparkles size={16} />
+              Fetch
             </button>
+            <a
+              href="/sketch"
+              draggable={false}
+              onPointerDown={prefetchHlbSnapshot}
+              onContextMenu={(event) => {
+                // Keep browser “Open link in new tab”; stop map from eating the event
+                event.stopPropagation();
+                prefetchHlbSnapshot();
+              }}
+              onAuxClick={(event) => {
+                // Middle-click new tab
+                if (event.button === 1) prefetchHlbSnapshot();
+              }}
+              onClick={(event) => {
+                if (isSketching || isExporting || project.boundary.length < 3) {
+                  event.preventDefault();
+                  return;
+                }
+                if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+                  // New-tab / modified click — native href; snapshot from pointerdown
+                  return;
+                }
+                event.preventDefault();
+                void goToSketch(event);
+              }}
+              aria-disabled={isSketching || isExporting || project.boundary.length < 3}
+              className={`relative z-[1100] grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-white text-gray-900 shadow-lg ${isSketching || isExporting || project.boundary.length < 3
+                ? 'pointer-events-none opacity-60'
+                : ''
+                }`}
+              title="HLB map (right-click to open in new tab)"
+            >
+              {isSketching ? <RefreshCw size={19} className="animate-spin" /> : <Sparkle size={19} />}
+            </a>
             <button
               type="button"
               onClick={exportMap}
@@ -1746,10 +2060,24 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
               className="grid h-12 w-12 place-items-center rounded-lg bg-white text-gray-900 shadow-lg"
               title="Edit boundary"
             >
-              <Move size={19} />
+              <SquarePen size={19} />
             </button>
+            </div>
           </div>
         )}
+
+        <AutoFetchModal
+          open={isAutoFetchOpen}
+          onClose={() => setIsAutoFetchOpen(false)}
+          buildingsFetched={autoLayers.buildings.fetched}
+          buildingsLoading={buildingsLoading}
+          buildingsProgress={buildingsProgress}
+          osmFetched={autoLayers.osmContext.fetched}
+          osmLoading={osmLoading}
+          error={autoFetchError}
+          onFetchBuildings={() => void handleFetchBuildings()}
+          onFetchOsm={() => void handleFetchOsm()}
+        />
 
         {/* Old TagEditor references removed */}
 

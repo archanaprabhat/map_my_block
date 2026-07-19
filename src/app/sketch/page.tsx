@@ -3,8 +3,9 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Download, RefreshCw } from 'lucide-react';
-import { createSketchFromDataUrl } from '../../lib/sketch/sketchClient';
-import { getSketchSource, getSketchOverlay, clearSketchResult } from '../../lib/sketch/sketchTransfer';
+import { renderHlbMap } from '../../lib/hlb/renderHlbMap';
+import { clearHlbTransfer, getHlbProject, setHlbResult } from '../../lib/hlb/hlbTransfer';
+import type { CensusProject } from '../../lib/storage';
 
 const primaryColor = '#212121';
 
@@ -13,30 +14,26 @@ type PageState = 'boot' | 'loading' | 'preview' | 'error';
 export default function SketchPage() {
   const router = useRouter();
   const [state, setState] = useState<PageState>('boot');
-  const [sourceDataUrl, setSourceDataUrl] = useState<string | null>(null);
-  const [sketchDataUrl, setSketchDataUrl] = useState<string | null>(null);
+  const [project, setProject] = useState<CensusProject | null>(null);
+  const [mapDataUrl, setMapDataUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [progress, setProgress] = useState(0);
-  const ranForSource = useRef<string | null>(null);
+  const ranForKey = useRef<string | null>(null);
 
-  const runSketch = useCallback(async (source: string) => {
+  const runRender = useCallback(async (snapshot: CensusProject) => {
     setState('loading');
     setError(null);
-    setProgress(0);
-    await clearSketchResult();
+    await clearHlbTransfer();
 
     try {
-      const overlay = await getSketchOverlay();
-      const result = await createSketchFromDataUrl(source, {
-        overlay,
-        onProgress: setProgress,
-      });
-      setSketchDataUrl(result);
+      // Yield so loading UI paints before canvas work
+      await new Promise((r) => requestAnimationFrame(() => r(undefined)));
+      const dataUrl = await renderHlbMap(snapshot);
+      setMapDataUrl(dataUrl);
+      await setHlbResult(dataUrl);
       setState('preview');
-      setProgress(100);
     } catch (err) {
-      console.error('Sketch failed', err);
-      setError(err instanceof Error ? err.message : 'Sketch failed');
+      console.error('HLB render failed', err);
+      setError(err instanceof Error ? err.message : 'HLB map failed');
       setState('error');
     }
   }, []);
@@ -45,30 +42,31 @@ export default function SketchPage() {
     let cancelled = false;
 
     const boot = async () => {
-      const source = await getSketchSource();
+      const snapshot = await getHlbProject();
       if (cancelled) return;
-      if (!source) {
-        setError('No map capture found. Go back to the map and tap Sketch again.');
+      if (!snapshot || snapshot.boundary.length < 3) {
+        setError('No HLB data found. Go back to the map, confirm a boundary, then tap Sketch.');
         setState('error');
         return;
       }
-      setSourceDataUrl(source);
-      if (ranForSource.current === source) return;
-      ranForSource.current = source;
-      void runSketch(source);
+      setProject(snapshot);
+      const key = `${snapshot.boundary.length}-${snapshot.features.length}-${snapshot.features.map((f) => f.id).join(',')}`;
+      if (ranForKey.current === key) return;
+      ranForKey.current = key;
+      void runRender(snapshot);
     };
 
     void boot();
     return () => {
       cancelled = true;
     };
-  }, [runSketch]);
+  }, [runRender]);
 
-  const downloadSketch = () => {
-    if (!sketchDataUrl) return;
+  const downloadMap = () => {
+    if (!mapDataUrl) return;
     const link = document.createElement('a');
-    link.download = `census-sketch-${new Date().toISOString().slice(0, 10)}.png`;
-    link.href = sketchDataUrl;
+    link.download = `hlb-map-A4-${new Date().toISOString().slice(0, 10)}.png`;
+    link.href = mapDataUrl;
     link.click();
   };
 
@@ -84,8 +82,10 @@ export default function SketchPage() {
           <ArrowLeft size={20} />
         </button>
         <div>
-          <h1 className="text-base font-semibold text-[#212121]">Hand-drawn sketch</h1>
-          <p className="text-xs text-gray-500">Boundary crop · satellite structure · your tags/roads</p>
+          <h1 className="text-base font-semibold text-[#212121]">HLB map</h1>
+          <p className="text-xs text-gray-500">
+            Dotted black boundary · OSM roads · place names · TagIcons
+          </p>
         </div>
       </header>
 
@@ -94,16 +94,10 @@ export default function SketchPage() {
           <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
             <RefreshCw size={28} className="animate-spin" style={{ color: primaryColor }} />
             <div>
-              <p className="text-base font-semibold text-[#212121]">Generating hand-drawn sketch…</p>
+              <p className="text-base font-semibold text-[#212121]">Drawing HLB map…</p>
               <p className="mt-1 text-sm text-gray-500">
-                First run may take a moment while OpenCV loads.
+                Loading OSM roads & place names, then drawing your tags…
               </p>
-            </div>
-            <div className="h-2 w-full max-w-xs overflow-hidden rounded-full bg-gray-200">
-              <div
-                className="h-full rounded-full transition-all duration-300"
-                style={{ width: `${Math.max(8, progress)}%`, backgroundColor: primaryColor }}
-              />
             </div>
           </div>
         )}
@@ -120,10 +114,10 @@ export default function SketchPage() {
               >
                 Back to map
               </button>
-              {sourceDataUrl && (
+              {project && (
                 <button
                   type="button"
-                  onClick={() => void runSketch(sourceDataUrl)}
+                  onClick={() => void runRender(project)}
                   className="rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800"
                 >
                   Try again
@@ -133,29 +127,29 @@ export default function SketchPage() {
           </div>
         )}
 
-        {state === 'preview' && sketchDataUrl && (
+        {state === 'preview' && mapDataUrl && (
           <div className="flex flex-1 flex-col gap-4">
             <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={sketchDataUrl}
-                alt="Hand-drawn sketch of your map"
+                src={mapDataUrl}
+                alt="HLB vector map"
                 className="mx-auto max-h-[70dvh] w-full object-contain"
               />
             </div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={downloadSketch}
+                onClick={downloadMap}
                 className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg text-sm font-semibold text-white"
                 style={{ backgroundColor: primaryColor }}
               >
                 <Download size={18} />
-                Download sketch
+                Download A4
               </button>
               <button
                 type="button"
-                onClick={() => sourceDataUrl && void runSketch(sourceDataUrl)}
+                onClick={() => project && void runRender(project)}
                 className="flex h-12 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold text-gray-800"
               >
                 <RefreshCw size={16} />

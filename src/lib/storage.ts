@@ -1,5 +1,9 @@
 import localforage from 'localforage';
 import { withTimeout } from './reliability';
+import { AutoFetchLayers, emptyAutoFetchLayers } from './autoFetch/types';
+
+export type { AutoFetchLayers, BuildingFootprint, OsmForest } from './autoFetch/types';
+export { emptyAutoFetchLayers } from './autoFetch/types';
 
 export type Coordinate = {
   lat: number;
@@ -25,6 +29,8 @@ export type CensusFeature = {
   geometry: FeatureGeometry;
   properties: {
     label?: string;
+    /** Map / HLB icon scale (1 = default). Buildings can be enlarged when editing. */
+    iconScale?: number;
     timestamp: number;
     [key: string]: any;
   };
@@ -49,6 +55,8 @@ export type CensusProject = {
   isBoundaryConfirmed: boolean;
   features: CensusFeature[];
   initialLocation: DetectedLocation | null;
+  /** Auto-fetched reference layers (Google buildings + OSM context). */
+  autoFetchLayers?: AutoFetchLayers;
 };
 
 const PROJECT_KEY = 'census-mapper-project-v3';
@@ -60,7 +68,8 @@ export const emptyProject: CensusProject = {
   boundary: [],
   isBoundaryConfirmed: false,
   features: [],
-  initialLocation: null
+  initialLocation: null,
+  autoFetchLayers: emptyAutoFetchLayers(),
 };
 
 const normalizeProject = (project: Partial<CensusProject> | null): CensusProject => {
@@ -74,6 +83,23 @@ const normalizeProject = (project: Partial<CensusProject> | null): CensusProject
     features: project?.features ?? [],
     boundary: project?.boundary ?? [],
     initialLocation: project?.initialLocation ?? null,
+    autoFetchLayers: project?.autoFetchLayers
+      ? {
+          buildings: {
+            ...emptyAutoFetchLayers().buildings,
+            ...project.autoFetchLayers.buildings,
+            footprints: project.autoFetchLayers.buildings?.footprints ?? [],
+          },
+          osmContext: {
+            ...emptyAutoFetchLayers().osmContext,
+            ...project.autoFetchLayers.osmContext,
+            roads: project.autoFetchLayers.osmContext?.roads ?? [],
+            forests: project.autoFetchLayers.osmContext?.forests ?? [],
+            waters: project.autoFetchLayers.osmContext?.waters ?? [],
+            landmarks: project.autoFetchLayers.osmContext?.landmarks ?? [],
+          },
+        }
+      : emptyAutoFetchLayers(),
     layoutOverlay: project?.layoutOverlay
       ? {
           ...project.layoutOverlay,
