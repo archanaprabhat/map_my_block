@@ -69,15 +69,65 @@ const withPWA = withPWAInit({
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // Moved out of experimental to the root level!
   allowedDevOrigins: ['192.168.1.7'],
-  webpack: (config) => {
+  compress: true,
+  productionBrowserSourceMaps: false,
+  optimizeFonts: true,
+  swcMinify: true,
+  
+  // Image optimization
+  images: {
+    deviceSizes: [640, 750, 828, 1080, 1200, 1920, 2048],
+    imageSizes: [16, 32, 48, 64, 96, 128, 256],
+    minimumCacheTTL: 31536000, // 1 year
+  },
+  
+  // Performance optimizations
+  experimental: {
+    optimizePackageImports: [
+      'lucide-react',
+      'leaflet',
+      'react-leaflet',
+    ],
+  },
+  
+  webpack: (config, { isServer }) => {
     // Allow Worker(new URL(..., import.meta.url)) for sketch OpenCV worker
     config.output = config.output || {};
     config.output.environment = {
       ...(config.output.environment || {}),
       asyncFunction: true,
     };
+    
+    // Module splitting for Leaflet
+    if (!isServer) {
+      config.optimization = config.optimization || {};
+      config.optimization.splitChunks = {
+        ...(config.optimization.splitChunks || {}),
+        cacheGroups: {
+          ...(config.optimization.splitChunks?.cacheGroups || {}),
+          leaflet: {
+            test: /[\\/]node_modules[\\/]leaflet/,
+            name: 'leaflet-libs',
+            priority: 30,
+            reuseExistingChunk: true,
+          },
+          reactLeaflet: {
+            test: /[\\/]node_modules[\\/]react-leaflet/,
+            name: 'react-leaflet-libs',
+            priority: 30,
+            reuseExistingChunk: true,
+          },
+          icons: {
+            test: /[\\/]node_modules[\\/]lucide-react/,
+            name: 'icons-libs',
+            priority: 20,
+            reuseExistingChunk: true,
+          },
+        },
+      };
+    }
+    
     return config;
   },
 };

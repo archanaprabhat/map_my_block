@@ -18,7 +18,7 @@ type AutoFetchModalProps = {
   onFetchOsm: () => void;
 };
 
-export default function AutoFetchModal({
+function AutoFetchModal({
   open,
   onClose,
   buildingsFetched,
@@ -148,3 +148,5 @@ export default function AutoFetchModal({
     </div>
   );
 }
+
+export default React.memo(AutoFetchModal);

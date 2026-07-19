@@ -7,9 +7,8 @@ import {
   placePriority,
   pointInPolygon,
 } from '../hlb/osmContext';
+import { postOverpassQuery } from '../overpass';
 import { OsmForest } from './types';
-
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 
 export type OsmAutoLayersResult = {
   roads: OsmRoad[];
@@ -18,7 +17,7 @@ export type OsmAutoLayersResult = {
   landmarks: OsmPlaceLabel[];
 };
 
-const boundsFromCoords = (coords: Coordinate[], padDeg = 0.002) => {
+const boundsFromCoords = (coords: Coordinate[], padDeg = 0.0015) => {
   let south = Infinity;
   let north = -Infinity;
   let west = Infinity;
@@ -29,11 +28,18 @@ const boundsFromCoords = (coords: Coordinate[], padDeg = 0.002) => {
     west = Math.min(west, c.lng);
     east = Math.max(east, c.lng);
   }
+
+  // Cap pad so huge / sloppy boundaries don't kill Overpass
+  const latSpan = Math.min(0.04, Math.max(0.004, north - south + padDeg * 2));
+  const lngSpan = Math.min(0.04, Math.max(0.004, east - west + padDeg * 2));
+  const latMid = (south + north) / 2;
+  const lngMid = (west + east) / 2;
+
   return {
-    south: south - padDeg,
-    north: north + padDeg,
-    west: west - padDeg,
-    east: east + padDeg,
+    south: latMid - latSpan / 2,
+    north: latMid + latSpan / 2,
+    west: lngMid - lngSpan / 2,
+    east: lngMid + lngSpan / 2,
   };
 };
 
@@ -63,64 +69,30 @@ export async function fetchOsmAutoLayers(boundary: Coordinate[]): Promise<OsmAut
     throw new Error('Confirm a boundary before fetching OSM layers.');
   }
 
-  const b = boundsFromCoords(boundary, 0.003);
+  const b = boundsFromCoords(boundary, 0.002);
   const bbox = `${b.south},${b.west},${b.north},${b.east}`;
 
+  // Lean query — fewer selectors = fewer 504s on public Overpass mirrors
   const query = `
-[out:json][timeout:45];
+[out:json][timeout:25];
 (
-  way["highway"](${bbox});
-  way["waterway"](${bbox});
+  way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service)$"](${bbox});
+  way["waterway"~"^(river|stream|canal|drain)$"](${bbox});
   way["natural"="water"](${bbox});
   way["landuse"="reservoir"](${bbox});
-  way["natural"="wetland"](${bbox});
-  relation["natural"="water"](${bbox});
   way["natural"="wood"](${bbox});
   way["landuse"="forest"](${bbox});
-  relation["landuse"="forest"](${bbox});
-  relation["natural"="wood"](${bbox});
   node["name"]["amenity"](${bbox});
   node["name"]["place"](${bbox});
   node["name"]["leisure"](${bbox});
   node["name"]["tourism"](${bbox});
-  node["name"]["natural"](${bbox});
   node["name"]["historic"](${bbox});
-  node["name"]["shop"](${bbox});
-  node["name"]["office"](${bbox});
-  node["name"]["waterway"](${bbox});
-  node["name:ml"]["amenity"](${bbox});
-  node["name:ml"]["place"](${bbox});
-  node["name:ml"]["leisure"](${bbox});
-  node["name:ml"]["natural"](${bbox});
-  way["name"]["natural"](${bbox});
-  way["name"]["landuse"](${bbox});
-  way["name"]["waterway"](${bbox});
-  way["name"]["leisure"](${bbox});
-  way["name"]["amenity"](${bbox});
-  way["name"]["tourism"](${bbox});
-  way["name"]["historic"](${bbox});
-  way["name:ml"]["natural"](${bbox});
-  way["name:ml"]["leisure"](${bbox});
-  way["name:ml"]["amenity"](${bbox});
-  way["name:ml"]["waterway"](${bbox});
+  node["name"]["natural"](${bbox});
 );
 out body geom;
 `.trim();
 
-  const response = await fetch(OVERPASS_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-      Accept: 'application/json',
-      'User-Agent': 'MapMyBlock-Census2027/1.0',
-    },
-    body: `data=${encodeURIComponent(query)}`,
-  });
-
-  if (!response.ok) {
-    throw new Error(`OSM fetch failed (${response.status})`);
-  }
-
+  const response = await postOverpassQuery(query);
   const data = (await response.json()) as {
     elements?: Array<{
       type: string;
@@ -154,8 +126,7 @@ out body geom;
     }
 
     const isForest =
-      (el.type === 'way' || el.type === 'relation') &&
-      (tags.natural === 'wood' || tags.landuse === 'forest');
+      el.type === 'way' && (tags.natural === 'wood' || tags.landuse === 'forest');
     if (isForest) {
       const coordinates = wayToCoords(el.geometry);
       if (coordinates.length >= 3) {
@@ -211,7 +182,6 @@ out body geom;
     const priority = placePriority(name, kind);
     if (priority < 80) continue;
 
-    // Prefer landmarks near / inside the block, but keep significant nearby ones
     const nearBlock =
       pointInPolygon(coordinate, boundary) ||
       Math.abs(coordinate.lat - boundary[0].lat) < 0.02;

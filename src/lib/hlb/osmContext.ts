@@ -1,4 +1,5 @@
 import { Coordinate } from '../storage';
+import { postOverpassQuery } from '../overpass';
 
 export type OsmRoad = {
   id: number;
@@ -28,8 +29,6 @@ export type OsmContext = {
   places: OsmPlaceLabel[];
   waters: OsmWater[];
 };
-
-const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
 
 const boundsFromCoords = (coords: Coordinate[], padDeg = 0.0015) => {
   let south = Infinity;
@@ -113,51 +112,22 @@ export async function fetchOsmContext(boundary: Coordinate[]): Promise<OsmContex
   const bbox = `${b.south},${b.west},${b.north},${b.east}`;
 
   const query = `
-[out:json][timeout:45];
+[out:json][timeout:25];
 (
-  way["highway"](${bbox});
-  way["waterway"](${bbox});
+  way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential)$"](${bbox});
+  way["waterway"~"^(river|stream|canal)$"](${bbox});
   way["natural"="water"](${bbox});
   way["landuse"="reservoir"](${bbox});
-  relation["natural"="water"](${bbox});
   node["name"]["amenity"](${bbox});
   node["name"]["place"](${bbox});
   node["name"]["leisure"](${bbox});
   node["name"]["tourism"](${bbox});
   node["name"]["natural"](${bbox});
-  node["name"]["shop"](${bbox});
-  node["name"]["office"](${bbox});
-  node["name"]["waterway"](${bbox});
-  node["name:ml"]["amenity"](${bbox});
-  node["name:ml"]["place"](${bbox});
-  node["name:ml"]["leisure"](${bbox});
-  node["name:ml"]["natural"](${bbox});
-  way["name"]["natural"](${bbox});
-  way["name"]["landuse"](${bbox});
-  way["name"]["waterway"](${bbox});
-  way["name"]["leisure"](${bbox});
-  way["name"]["amenity"](${bbox});
-  way["name:ml"]["natural"](${bbox});
-  way["name:ml"]["leisure"](${bbox});
-  way["name:ml"]["amenity"](${bbox});
-  way["name:ml"]["waterway"](${bbox});
 );
 out body geom;
 `.trim();
 
-  const response = await fetch(OVERPASS_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-      Accept: 'application/json',
-      'User-Agent': 'MapMyBlock-Census2027/1.0',
-    },
-    body: `data=${encodeURIComponent(query)}`,
-  });
-
-  if (!response.ok) {
-    throw new Error(`OSM fetch failed (${response.status})`);
-  }
+  const response = await postOverpassQuery(query);
 
   const data = (await response.json()) as {
     elements?: Array<{

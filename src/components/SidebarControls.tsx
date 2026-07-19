@@ -79,7 +79,7 @@ type SidebarProps = {
   onToggleLanguage: () => void;
 };
 
-export default function SidebarControls({
+function SidebarControls({
   isOpen,
   onClose,
   features,
@@ -102,14 +102,17 @@ export default function SidebarControls({
       {/* Mobile Backdrop */}
       {isOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/40 md:hidden backdrop-blur-sm transition-opacity"
+          className="fixed inset-0 z-[1900] bg-black/40 backdrop-blur-sm transition-opacity md:z-40 md:hidden"
           onClick={onClose}
         />
       )}
 
       <div
-        className={`fixed inset-y-0 left-0 z-50 w-full max-w-sm bg-white shadow-2xl transform transition-all duration-300 ease-in-out md:relative md:w-[30%] md:max-w-none md:shrink-0 md:border-r md:border-gray-200 flex flex-col ${isOpen ? 'translate-x-0 md:ml-0' : '-translate-x-full md:-ml-[30%]'
-          }`}
+        className={`fixed inset-y-0 left-0 z-[2000] flex w-full max-w-sm transform flex-col bg-white shadow-2xl transition-all duration-300 ease-in-out md:relative md:z-50 md:max-w-none md:shrink-0 md:border-r md:border-gray-200 ${
+          isOpen
+            ? 'translate-x-0 md:ml-0 md:w-[30%]'
+            : 'pointer-events-none -translate-x-full md:pointer-events-auto md:ml-0 md:w-0 md:overflow-hidden md:border-0'
+        }`}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-100 bg-gray-50/50">
           <h2 className="text-xl font-bold text-gray-800 tracking-tight">
@@ -128,7 +131,7 @@ export default function SidebarControls({
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-6 bg-white">
+        <div className="flex-1 space-y-6 overflow-y-auto overscroll-contain bg-white p-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
           {/* Categories Accordion */}
           <div>
             <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider mb-3 px-1">
@@ -153,10 +156,15 @@ export default function SidebarControls({
                         {cat.subTypes.map((sub) => (
                           <button
                             key={sub.id}
+                            type="button"
                             onClick={() => {
                               onSelectSubType(type, sub);
+                              // Close drawer on phone so the map is tappable; keep panel open on desktop
+                              if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+                                onClose();
+                              }
                             }}
-                            className="text-left px-3 py-2.5 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-700 rounded-lg transition-colors flex items-center"
+                            className="flex items-center rounded-lg px-3 py-3 text-left text-sm text-gray-700 transition-colors hover:bg-indigo-50 hover:text-indigo-700 active:bg-indigo-100"
                           >
                             <SidebarIcon type={type} subType={sub.id} />
                             {getLabel(sub.labelEn, sub.labelMl)}
@@ -221,19 +229,23 @@ export default function SidebarControls({
                           <p className="text-sm font-semibold text-gray-900 line-clamp-1">{f.properties.label || 'Unnamed Feature'}</p>
                           <p className="text-xs text-gray-500 capitalize mt-0.5">{f.subType.replace('_', ' ')}</p>
                         </div>
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                           <button
+                            type="button"
                             onClick={() => {
                               setEditingId(f.id);
                               setEditValue(f.properties.label || '');
-                              // Also trigger the parent callback if needed for map focus
                               onEditFeature(f);
                             }}
-                            className="p-1.5 text-black hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                            className="rounded-lg p-2 text-black transition-colors hover:bg-indigo-50 hover:text-indigo-600"
                           >
                             <Edit2 size={14} />
                           </button>
-                          <button onClick={() => onDeleteFeature(f.id)} className="p-1.5 text-black hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                          <button
+                            type="button"
+                            onClick={() => onDeleteFeature(f.id)}
+                            className="rounded-lg p-2 text-black transition-colors hover:bg-red-50 hover:text-red-600"
+                          >
                             <Trash2 size={14} />
                           </button>
                         </div>
@@ -249,3 +261,5 @@ export default function SidebarControls({
     </>
   );
 }
+
+export default React.memo(SidebarControls);

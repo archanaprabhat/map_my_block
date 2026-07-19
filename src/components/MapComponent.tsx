@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense } from 'react';
 import { MapContainer, Marker, Polygon, Polyline, Popup, TileLayer, useMap, useMapEvents } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -863,7 +863,7 @@ function MapInteractionHandler({
   return null;
 }
 
-export default function MapComponent({ project, mode, activeTab, onProjectChange, onResetProject, onReplaceLayout }: MapComponentProps) {
+function MapComponent({ project, mode, activeTab, onProjectChange, onResetProject, onReplaceLayout }: MapComponentProps) {
   const router = useRouter();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [language, setLanguage] = useState<'en' | 'ml'>('en');
@@ -1285,13 +1285,15 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
         },
       });
     } catch (err) {
-      console.error('OSM auto-fetch failed', err);
+      console.warn('OSM auto-fetch failed', err);
+      const message =
+        err instanceof Error ? err.message : 'OSM fetch failed. Retry.';
       setAutoFetchError(
-        isConnectivityError(err)
-          ? 'Could not reach OpenStreetMap. Check your connection and retry.'
-          : err instanceof Error
-            ? err.message
-            : 'OSM fetch failed. Retry.'
+        /504|503|502|429|timed? ?out|overloaded/i.test(message)
+          ? 'OpenStreetMap is busy right now. Tap Fetch again in a few seconds.'
+          : isConnectivityError(err)
+            ? 'Could not reach OpenStreetMap. Check your connection and retry.'
+            : message
       );
     } finally {
       setOsmLoading(false);
@@ -1950,14 +1952,18 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
         )}
 
         {mode === 'field' && (
-          <div data-export-hidden="true" className="absolute inset-x-3 bottom-20 z-[1100] flex flex-col gap-2">
+          <div
+            data-export-hidden="true"
+            className="absolute inset-x-3 z-[1700] flex flex-col gap-2"
+            style={{ bottom: 'calc(4.75rem + env(safe-area-inset-bottom, 0px))' }}
+          >
             {(autoLayers.buildings.fetched || autoLayers.osmContext.fetched) && (
               <div className="flex flex-wrap gap-2">
                 {autoLayers.buildings.fetched && (
                   <button
                     type="button"
                     onClick={toggleBuildingsVisible}
-                    className="inline-flex items-center gap-2 rounded-full border border-white/50 bg-white/55 px-3 py-1.5 text-xs font-semibold text-gray-900 shadow-lg backdrop-blur-md"
+                    className="inline-flex touch-manipulation items-center gap-2 rounded-full border border-white/50 bg-white/55 px-3 py-1.5 text-xs font-semibold text-gray-900 shadow-lg backdrop-blur-md"
                     title={autoLayers.buildings.visible ? 'Hide Google buildings' : 'Show Google buildings'}
                   >
                     <Building2 size={14} className="text-orange-600" />
@@ -1973,7 +1979,7 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
                   <button
                     type="button"
                     onClick={toggleOsmVisible}
-                    className="inline-flex items-center gap-2 rounded-full border border-white/50 bg-white/55 px-3 py-1.5 text-xs font-semibold text-gray-900 shadow-lg backdrop-blur-md"
+                    className="inline-flex touch-manipulation items-center gap-2 rounded-full border border-white/50 bg-white/55 px-3 py-1.5 text-xs font-semibold text-gray-900 shadow-lg backdrop-blur-md"
                     title={autoLayers.osmContext.visible ? 'Hide OSM layers' : 'Show OSM layers'}
                   >
                     <Trees size={14} className="text-green-700" />
@@ -1989,8 +1995,13 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
             <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => setIsSidebarOpen(true)}
-              className="flex h-12 flex-1 items-center justify-center gap-2 rounded-lg font-semibold text-white shadow-lg"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setIsSidebarOpen(true);
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              className="flex h-12 flex-1 touch-manipulation items-center justify-center gap-2 rounded-lg font-semibold text-white shadow-lg active:opacity-90"
               style={{ backgroundColor: primaryColor }}
             >
               <MapPin size={18} />
@@ -2086,16 +2097,19 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
           {tileLayers[baseLayer].label}
         </div>
 
+        {/* Desktop only — open Map Tools sidebar (mobile uses Add tag) */}
         {!isSidebarOpen && (mode === 'field' || mode === 'setup') && (
           <button
+            type="button"
             data-export-hidden="true"
             onClick={() => setIsSidebarOpen(true)}
-            className="absolute left-3 top-28 z-[900] grid h-10 w-10 place-items-center rounded-lg bg-white/90 text-gray-700 shadow-sm backdrop-blur transition-all hover:bg-white hover:text-gray-900"
+            className="absolute left-3 top-28 z-[900] hidden h-10 w-10 place-items-center rounded-lg bg-white/90 text-gray-700 shadow-sm backdrop-blur transition-all hover:bg-white hover:text-gray-900 md:grid"
             title="Open Map Tools"
           >
             <Menu size={20} />
           </button>
         )}
+
         {(exportError || locationError) && (
           <div data-export-hidden="true" className="absolute inset-x-3 top-28 z-[1100] rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950 shadow-lg">
             <p className="font-semibold">{exportError ?? locationError}</p>
@@ -2125,3 +2139,5 @@ export default function MapComponent({ project, mode, activeTab, onProjectChange
     </div>
   );
 }
+
+export default React.memo(MapComponent);

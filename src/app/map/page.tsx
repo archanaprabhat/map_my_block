@@ -201,11 +201,14 @@ export default function MapPage() {
       )}
 
       {mode === 'field' && (
-        <nav className="fixed inset-x-0 bottom-0 z-[1600] grid h-16 grid-cols-2 border-t border-gray-200 bg-white shadow-[0_-2px_12px_rgba(15,23,42,0.08)]">
+        <nav
+          className="fixed inset-x-0 bottom-0 z-[1600] grid grid-cols-2 border-t border-gray-200 bg-white shadow-[0_-2px_12px_rgba(15,23,42,0.08)]"
+          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)', minHeight: '4rem' }}
+        >
           <button
             type="button"
             onClick={() => setActiveTab('map')}
-            className="flex flex-col items-center justify-center gap-1 text-xs font-medium"
+            className="flex min-h-16 touch-manipulation flex-col items-center justify-center gap-1 text-xs font-medium"
             style={{ color: activeTab === 'map' ? primaryColor : '#6b7280' }}
           >
             <Map size={21} />
@@ -214,7 +217,7 @@ export default function MapPage() {
           <button
             type="button"
             onClick={() => setActiveTab('profile')}
-            className="flex flex-col items-center justify-center gap-1 text-xs font-medium"
+            className="flex min-h-16 touch-manipulation flex-col items-center justify-center gap-1 text-xs font-medium"
             style={{ color: activeTab === 'profile' ? primaryColor : '#6b7280' }}
           >
             <User size={21} />
