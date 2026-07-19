@@ -36,7 +36,8 @@ import {
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { CensusProject, Coordinate, CensusFeature, LayoutOverlay, TagType, emptyAutoFetchLayers } from '../lib/storage';
-import SidebarControls, { SubTypeOption } from './SidebarControls';
+import SidebarControls from './SidebarControls';
+import type { SubTypeOption } from '../lib/featureCategories';
 import AutoFetchModal from './AutoFetchModal';
 import { createTagIcon, tagColors, getLinePattern } from './TagIcons';
 import PolylineDecorator from './PolylineDecorator';

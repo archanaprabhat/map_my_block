@@ -1,6 +1,6 @@
 import { CensusFeature, CensusProject, Coordinate, TagType } from '../storage';
-import { getSvgString } from '../../components/TagIcons';
-import { FEATURE_CATEGORIES } from '../../components/SidebarControls';
+import { getSvgString } from '../tagSvg';
+import { FEATURE_CATEGORIES } from '../featureCategories';
 import { fetchOsmContext, isSignificantHighway, type OsmContext, type OsmPlaceLabel, type OsmRoad, type OsmWater } from './osmContext';
 
 /**
