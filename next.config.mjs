@@ -4,6 +4,18 @@ import defaultRuntimeCaching from 'next-pwa/cache.js';
 const ONE_MONTH_IN_SECONDS = 30 * 24 * 60 * 60;
 
 const runtimeCaching = [
+  // Never cache the ping endpoint - used for connectivity checks
+  {
+    urlPattern: /\/api\/ping.*/i,
+    handler: 'NetworkFirst',
+    options: {
+      cacheName: 'ping-check',
+      networkTimeoutSeconds: 2,
+      expiration: {
+        maxAgeSeconds: 0, // Never use cache
+      },
+    },
+  },
   {
     urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*$/i,
     handler: 'CacheFirst',

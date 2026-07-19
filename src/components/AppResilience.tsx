@@ -61,55 +61,71 @@ function OfflineBanner() {
 
   useEffect(() => {
     let checkTimer: NodeJS.Timeout | null = null;
+    let mounted = true;
 
     const markOnline = () => {
-      setIsOnline(true);
+      if (mounted) setIsOnline(true);
       window.dispatchEvent(new Event(APP_ONLINE_EVENT));
     };
-    const markOffline = () => setIsOnline(false);
+    const markOffline = () => {
+      if (mounted) setIsOnline(false);
+    };
 
     const checkConnectivity = async () => {
+      if (!mounted) return;
+      
+      // First check: use native navigator.onLine
+      if (!navigator.onLine) {
+        markOffline();
+        return;
+      }
+
+      // Second check: verify with actual network request
       try {
-        // Simple connectivity check via HEAD request to root
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
         
-        const response = await fetch('/', { 
-          method: 'HEAD', 
+        // Use cache-busting to ensure service worker doesn't return stale cached response
+        const response = await fetch(`/api/ping?t=${Date.now()}`, { 
+          method: 'GET', 
           cache: 'no-store',
-          signal: controller.signal 
+          signal: controller.signal,
+          headers: {
+            'pragma': 'no-cache',
+            'cache-control': 'no-cache'
+          }
         });
         
         clearTimeout(timeoutId);
         
         if (response.ok) {
-          if (!isOnline) {
-            markOnline();
-          }
-        }
-      } catch (err) {
-        // Network error occurred
-        if (isOnline) {
+          markOnline();
+        } else {
           markOffline();
         }
+      } catch (err) {
+        // Network error - we're offline
+        markOffline();
       }
     };
 
-    // Check immediately
+    // Initial check
     checkConnectivity();
 
-    // Then check periodically every 5 seconds
-    checkTimer = setInterval(checkConnectivity, 5000);
+    // Periodic check every 3 seconds (more aggressive to catch reconnects faster)
+    checkTimer = setInterval(checkConnectivity, 3000);
 
+    // Also listen to browser events as backup
     window.addEventListener('online', markOnline);
     window.addEventListener('offline', markOffline);
 
     return () => {
+      mounted = false;
       if (checkTimer) clearInterval(checkTimer);
       window.removeEventListener('online', markOnline);
       window.removeEventListener('offline', markOffline);
     };
-  }, [isOnline]);
+  }, []);
 
   if (isOnline) return null;
 
