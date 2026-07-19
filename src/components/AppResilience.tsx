@@ -60,20 +60,56 @@ function OfflineBanner() {
   const [isOnline, setIsOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
 
   useEffect(() => {
+    let checkTimer: NodeJS.Timeout | null = null;
+
     const markOnline = () => {
       setIsOnline(true);
       window.dispatchEvent(new Event(APP_ONLINE_EVENT));
     };
     const markOffline = () => setIsOnline(false);
 
+    const checkConnectivity = async () => {
+      try {
+        // Simple connectivity check via HEAD request to root
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+        
+        const response = await fetch('/', { 
+          method: 'HEAD', 
+          cache: 'no-store',
+          signal: controller.signal 
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (response.ok) {
+          if (!isOnline) {
+            markOnline();
+          }
+        }
+      } catch (err) {
+        // Network error occurred
+        if (isOnline) {
+          markOffline();
+        }
+      }
+    };
+
+    // Check immediately
+    checkConnectivity();
+
+    // Then check periodically every 5 seconds
+    checkTimer = setInterval(checkConnectivity, 5000);
+
     window.addEventListener('online', markOnline);
     window.addEventListener('offline', markOffline);
 
     return () => {
+      if (checkTimer) clearInterval(checkTimer);
       window.removeEventListener('online', markOnline);
       window.removeEventListener('offline', markOffline);
     };
-  }, []);
+  }, [isOnline]);
 
   if (isOnline) return null;
 
