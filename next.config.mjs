@@ -4,17 +4,12 @@ import defaultRuntimeCaching from 'next-pwa/cache.js';
 const ONE_MONTH_IN_SECONDS = 30 * 24 * 60 * 60;
 
 const runtimeCaching = [
-  // Never cache the ping endpoint - used for connectivity checks
+  // Connectivity checks must always reach the network. NetworkFirst can report a
+  // false failure when its cache fallback expires before a slow request returns.
   {
     urlPattern: /\/api\/ping.*/i,
-    handler: 'NetworkFirst',
-    options: {
-      cacheName: 'ping-check',
-      networkTimeoutSeconds: 2,
-      expiration: {
-        maxAgeSeconds: 0, // Never use cache
-      },
-    },
+    handler: 'NetworkOnly',
+    options: {},
   },
   {
     urlPattern: /^https:\/\/[abc]\.tile\.openstreetmap\.org\/.*$/i,
@@ -69,7 +64,9 @@ const runtimeCaching = [
 const withPWA = withPWAInit({
   dest: 'public',
   register: true,
-  skipWaiting: false,
+  // Activate this fix on the next page load instead of leaving the previous
+  // service worker in control until a user manually accepts an update.
+  skipWaiting: true,
   clientsClaim: true,
   reloadOnOnline: false,
   disable: process.env.NODE_ENV === 'development',

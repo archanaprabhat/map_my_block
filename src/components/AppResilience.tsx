@@ -1,6 +1,6 @@
 'use client';
 
-import React, { Component, ReactNode, useEffect, useState } from 'react';
+import React, { Component, ReactNode, useEffect, useRef, useState } from 'react';
 import { RefreshCw, RotateCcw, WifiOff } from 'lucide-react';
 import { APP_ONLINE_EVENT, restartApp } from '../lib/reliability';
 
@@ -58,17 +58,24 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
 
 function OfflineBanner() {
   const [isOnline, setIsOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
+  const isOnlineRef = useRef(isOnline);
 
   useEffect(() => {
-    let checkTimer: NodeJS.Timeout | null = null;
+    let checkTimer: number | null = null;
     let mounted = true;
 
     const markOnline = () => {
-      if (mounted) setIsOnline(true);
-      window.dispatchEvent(new Event(APP_ONLINE_EVENT));
+      if (!isOnlineRef.current) {
+        isOnlineRef.current = true;
+        if (mounted) setIsOnline(true);
+        window.dispatchEvent(new Event(APP_ONLINE_EVENT));
+      }
     };
     const markOffline = () => {
-      if (mounted) setIsOnline(false);
+      if (isOnlineRef.current) {
+        isOnlineRef.current = false;
+        if (mounted) setIsOnline(false);
+      }
     };
 
     const checkConnectivity = async () => {
@@ -80,12 +87,13 @@ function OfflineBanner() {
         return;
       }
 
-      // Second check: verify with actual network request
+      // Verify the connection without letting a transient endpoint, service-worker,
+      // or mobile-network delay override the browser's online/offline state.
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
-        
-        // Use cache-busting to ensure service worker doesn't return stale cached response
+        // The service worker has a NetworkOnly route for this endpoint.
         const response = await fetch(`/api/ping?t=${Date.now()}`, { 
           method: 'GET', 
           cache: 'no-store',
@@ -95,25 +103,25 @@ function OfflineBanner() {
             'cache-control': 'no-cache'
           }
         });
-        
-        clearTimeout(timeoutId);
-        
+
         if (response.ok) {
           markOnline();
-        } else {
-          markOffline();
         }
-      } catch (err) {
-        // Network error - we're offline
-        markOffline();
+      } catch {
+        // navigator.onLine is still true. Do not display a global "Offline"
+        // message for one failed probe: it may be a slow Vercel response or a
+        // service-worker/browser-level request failure.
+      } finally {
+        window.clearTimeout(timeoutId);
       }
     };
 
     // Initial check
     checkConnectivity();
 
-    // Periodic check every 3 seconds (more aggressive to catch reconnects faster)
-    checkTimer = setInterval(checkConnectivity, 3000);
+    // A low-frequency probe can confirm recovery without creating background
+    // traffic or repeatedly retrying searches.
+    checkTimer = window.setInterval(checkConnectivity, 30_000);
 
     // Also listen to browser events as backup
     window.addEventListener('online', markOnline);
