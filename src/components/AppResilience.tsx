@@ -65,17 +65,18 @@ function OfflineBanner() {
     let mounted = true;
 
     const markOnline = () => {
-      if (!isOnlineRef.current) {
-        isOnlineRef.current = true;
-        if (mounted) setIsOnline(true);
+      const wasOnline = isOnlineRef.current;
+      isOnlineRef.current = true;
+      // Always reconcile React state. The ref only prevents duplicate retry
+      // events; using it to skip this update can leave a visible stale banner.
+      if (mounted) setIsOnline(true);
+      if (!wasOnline) {
         window.dispatchEvent(new Event(APP_ONLINE_EVENT));
       }
     };
     const markOffline = () => {
-      if (isOnlineRef.current) {
-        isOnlineRef.current = false;
-        if (mounted) setIsOnline(false);
-      }
+      isOnlineRef.current = false;
+      if (mounted) setIsOnline(false);
     };
 
     const checkConnectivity = async () => {
