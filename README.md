@@ -28,6 +28,18 @@ A mobile-first PWA for Census 2027 enumerators to digitize and map their assigne
 | Icons | Lucide React | Interface icons |
 
 
+## OpenAI Tools Used
+
+This project was built using OpenAI tools throughout the development process.
+
+### Codex
+
+I used **OpenAI Codex** to build the project from start to finish. I described the features and requirements, and Codex helped implement them, generate code, refactor components, fix bugs, and iterate quickly while I guided the overall product and technical decisions.
+
+### GPT-5.6
+
+I used **GPT-5.6** as a research and planning assistant. It helped me compare libraries, choose the right technologies for the project, understand concepts like PWAs and service workers, solve implementation issues, and improve the project documentation throughout development.
+
 ## Run Locally
 
 ### Prerequisites
