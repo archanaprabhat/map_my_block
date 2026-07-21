@@ -57,8 +57,12 @@ class AppErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryS
 }
 
 function OfflineBanner() {
-  const [isOnline, setIsOnline] = useState(() => (typeof navigator === 'undefined' ? true : navigator.onLine));
-  const isOnlineRef = useRef(isOnline);
+  // Browser online/offline events are advisory and can be incorrect on mobile
+  // emulation and some network stacks. Start optimistic and use the real ping
+  // endpoint as the authoritative signal for this banner.
+  const [isOnline, setIsOnline] = useState(true);
+  const isOnlineRef = useRef(true);
+  const failedProbeCountRef = useRef(0);
 
   useEffect(() => {
     let checkTimer: number | null = null;
@@ -67,6 +71,7 @@ function OfflineBanner() {
     const markOnline = () => {
       const wasOnline = isOnlineRef.current;
       isOnlineRef.current = true;
+      failedProbeCountRef.current = 0;
       // Always reconcile React state. The ref only prevents duplicate retry
       // events; using it to skip this update can leave a visible stale banner.
       if (mounted) setIsOnline(true);
@@ -82,14 +87,9 @@ function OfflineBanner() {
     const checkConnectivity = async () => {
       if (!mounted) return;
       
-      // First check: use native navigator.onLine
-      if (!navigator.onLine) {
-        markOffline();
-        return;
-      }
-
-      // Verify the connection without letting a transient endpoint, service-worker,
-      // or mobile-network delay override the browser's online/offline state.
+      // Verify connectivity with a same-origin, network-only request. Do not use
+      // navigator.onLine as a verdict: it only reports the browser's network
+      // interface state, not whether this application can reach the internet.
       const controller = new AbortController();
       const timeoutId = window.setTimeout(() => controller.abort(), 8000);
 
@@ -107,14 +107,17 @@ function OfflineBanner() {
 
         if (response.ok) {
           markOnline();
+          return;
         }
       } catch {
-        // navigator.onLine is still true. Do not display a global "Offline"
-        // message for one failed probe: it may be a slow Vercel response or a
-        // service-worker/browser-level request failure.
+        // Fall through to the shared failure handling below.
       } finally {
         window.clearTimeout(timeoutId);
       }
+
+      // Avoid showing an Offline banner for a single transient request failure.
+      failedProbeCountRef.current += 1;
+      if (failedProbeCountRef.current >= 2) markOffline();
     };
 
     // Initial check
@@ -124,15 +127,16 @@ function OfflineBanner() {
     // traffic or repeatedly retrying searches.
     checkTimer = window.setInterval(checkConnectivity, 30_000);
 
-    // Also listen to browser events as backup
-    window.addEventListener('online', markOnline);
-    window.addEventListener('offline', markOffline);
+    // Use browser events only to prompt an immediate authoritative check.
+    // They must not directly change the banner because they can be false.
+    window.addEventListener('online', checkConnectivity);
+    window.addEventListener('offline', checkConnectivity);
 
     return () => {
       mounted = false;
       if (checkTimer) clearInterval(checkTimer);
-      window.removeEventListener('online', markOnline);
-      window.removeEventListener('offline', markOffline);
+      window.removeEventListener('online', checkConnectivity);
+      window.removeEventListener('offline', checkConnectivity);
     };
   }, []);
 
