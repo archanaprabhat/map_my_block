@@ -19,6 +19,10 @@ export const metadata: Metadata = {
   title: "CensusBlock Mapper",
   description: "Offline PWA for Census Enumerators",
   manifest: "/manifest.json",
+  icons: {
+    icon: [{ url: '/favicon.png', type: 'image/png', sizes: '512x512' }],
+    apple: [{ url: '/favicon.png', type: 'image/png', sizes: '512x512' }],
+  },
   metadataBase: new URL("https://census.local"),
 };
 

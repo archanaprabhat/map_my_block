@@ -211,7 +211,7 @@ export default function MapUploader({
   return (
     <div
       className="relative flex h-screen w-full flex-col items-center justify-center bg-cover bg-center p-4"
-      style={{ backgroundImage: 'url(/cover.png)' }}
+      style={{ backgroundImage: 'url(/cover.webp)' }}
     >
       <div className="absolute inset-0 z-0 bg-black/10" />
 

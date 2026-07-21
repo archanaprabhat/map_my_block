@@ -39,3 +39,11 @@ yarn-error.log*
 # OpenCV.js is copied from node_modules on postinstall/build
 /public/opencv/opencv.js
 
+# Local AI-assistant instructions and configuration
+/AGENTS.md
+/AGENT_*.md
+/CLAUDE.md
+/CODEX.md
+/.agents/
+/.codex/
+/.claude/
