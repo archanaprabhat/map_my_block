@@ -145,8 +145,8 @@ export default function HomeScreen() {
         >
           <div className={`w-full ${isMl ? 'max-w-[460px]' : 'max-w-[500px]'}`}>
             <ImageCompareSlider
-              beforeSrc="/demo-map-before.webp"
-              afterSrc="/demo-map-after.webp"
+              beforeSrc="/demo-map-before.avif"
+              afterSrc="/demo-map-after.avif"
               beforeAlt="Digital map view"
               afterAlt="Hand-drawn HLB style map"
               initial={55}
