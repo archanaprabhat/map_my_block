@@ -19,7 +19,6 @@ export async function postOverpassQuery(query: string): Promise<Response> {
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
           Accept: 'application/json',
-          'User-Agent': 'MapMyBlock-Census2027/1.0',
         },
         body: `data=${encodeURIComponent(query)}`,
         signal: controller.signal,

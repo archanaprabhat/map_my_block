@@ -75,6 +75,7 @@ export async function fetchOsmAutoLayers(boundary: Coordinate[]): Promise<OsmAut
   // Lean query — fewer selectors = fewer 504s on public Overpass mirrors
   const query = `
 [out:json][timeout:25];
+/* contact: mapmyblock-census2027@example.com */
 (
   way["highway"~"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service)$"](${bbox});
   way["waterway"~"^(river|stream|canal|drain)$"](${bbox});
